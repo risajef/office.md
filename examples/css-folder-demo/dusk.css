@@ -1,0 +1,39 @@
+:root {
+  --page-bg: #1c1c24;
+  --ink: #eeeef6;
+  --muted: #a8a7b8;
+  --line: #41414e;
+  --paper: #282832;
+  --accent: #aaa2ff;
+  --accent-soft: #3b385c;
+}
+
+.editor-card,
+.sidebar-section {
+  box-shadow: 0 20px 50px rgb(0 0 0 / 18%);
+}
+
+#editor .ProseMirror,
+#editor .ProseMirror h1,
+#editor .ProseMirror h2,
+#editor .ProseMirror h3,
+.document-name,
+.file-select {
+  color: var(--ink);
+}
+
+.rich-toolbar-host {
+  background: #23232c;
+}
+
+.editor-toolbar,
+.editor-footer {
+  background: var(--paper);
+}
+
+.markdown-include,
+.markdown-include-content {
+  border-color: #464756;
+  color: #e4e4ee;
+  background: #30313b;
+}

@@ -1,0 +1,3 @@
+- [ ] including a different markdown should not add it as a code block but render the content at that place
+- [ ] formula edit should not show `$$` or `\ [`
+- [ ] The file viewer on the left should show folders that can be opened and collapsed

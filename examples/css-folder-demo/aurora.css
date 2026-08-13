@@ -1,0 +1,13 @@
+:root {
+  --page-bg: #eef7f5;
+  --ink: #173c3a;
+  --muted: #63807c;
+  --line: #c8e3de;
+  --paper: #fbfffe;
+  --accent: #118b78;
+  --accent-soft: #dff5ef;
+}
+
+.editor-card {
+  border-radius: 24px;
+}

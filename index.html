@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A minimal markdown editor powered by Milkdown."
+    />
+    <title>Milkdown — A quiet place to write</title>
+  </head>
+  <body>
+    <div class="site-shell">
+      <main class="page-content">
+        <div class="workspace-layout">
+          <aside class="outline-sidebar" aria-label="Document outline">
+            <section class="sidebar-section outline-section">
+              <div class="sidebar-heading">
+                <h2>Outline</h2>
+              </div>
+              <nav id="document-outline" aria-label="Document outline"></nav>
+            </section>
+
+          </aside>
+
+          <div class="workspace-main">
+            <section class="editor-card" aria-label="Markdown editor">
+          <div class="editor-toolbar">
+            <div class="document-name">
+              <span class="file-icon" aria-hidden="true">✦</span>
+              <span id="document-name">untitled.md</span>
+            </div>
+            <div class="toolbar-actions">
+              <span class="save-status" id="save-status">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="save-status-label">Ready to write</span>
+              </span>
+              <button class="copy-button" id="copy-markdown" type="button">
+                Copy markdown
+              </button>
+            </div>
+          </div>
+
+          <div class="rich-toolbar-host" id="rich-toolbar" aria-label="Rich text formatting"></div>
+
+          <div class="editor-wrap">
+            <div id="editor"></div>
+          </div>
+
+          <div class="editor-footer">
+            <span id="document-stats">0 words · 0 characters</span>
+          </div>
+            </section>
+
+            <section
+              class="debug-markdown"
+              id="debug-markdown-view"
+              hidden
+              aria-label="Read-only Markdown debug view"
+            >
+              <div class="debug-markdown-header">
+                <span>Read-only Markdown</span>
+                <span>Debug mode</span>
+              </div>
+              <pre><code id="debug-markdown-content"></code></pre>
+            </section>
+          </div>
+
+          <div
+            class="workspace-resizer workspace-resizer-right"
+            id="editor-width-resizer"
+            role="separator"
+            aria-label="Resize editor"
+            aria-orientation="vertical"
+            aria-valuemin="420"
+            aria-valuenow="0"
+            tabindex="0"
+          ></div>
+
+          <aside class="workspace-sidebar" aria-label="Workspace files and themes">
+            <section class="sidebar-section files-section">
+              <div class="sidebar-heading">
+                <h2>Files</h2>
+                <button class="sidebar-action" id="new-file" type="button" aria-label="Create file">+</button>
+              </div>
+              <div class="folder-actions">
+                <button class="folder-button" id="open-folder" type="button">Open folder</button>
+                <button class="folder-button" id="open-css-folder" type="button">CSS folder</button>
+              </div>
+              <p class="folder-status" id="folder-status">Browser-local files</p>
+              <ul class="file-list" id="file-list"></ul>
+            </section>
+
+            <section class="sidebar-section theme-section">
+              <label class="sidebar-label" for="document-theme">Theme</label>
+              <select id="document-theme" aria-label="Apply a CSS theme"></select>
+              <p class="folder-status" id="css-folder-status">CSS themes come from files</p>
+            </section>
+          </aside>
+        </div>
+
+      </main>
+
+    </div>
+
+    <div class="source-dialog" id="source-dialog" hidden>
+      <div class="source-dialog-card" role="dialog" aria-modal="true" aria-labelledby="source-dialog-title">
+        <h2 id="source-dialog-title">Enter text</h2>
+        <label id="source-dialog-label" for="source-dialog-input">Value</label>
+        <textarea id="source-dialog-input" spellcheck="false"></textarea>
+        <div class="source-dialog-actions">
+          <button class="dialog-secondary" id="source-dialog-cancel" type="button">Cancel</button>
+          <button class="dialog-primary" id="source-dialog-submit" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
