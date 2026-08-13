@@ -53,6 +53,28 @@
             </section>
 
             <section
+              class="csv-editor-card"
+              id="csv-editor-card"
+              hidden
+              aria-label="CSV spreadsheet editor"
+            >
+              <div class="editor-toolbar csv-editor-toolbar">
+                <div class="document-name">
+                  <span class="file-icon" aria-hidden="true">▦</span>
+                  <span id="csv-editor-name">CSV spreadsheet</span>
+                </div>
+                <div class="csv-editor-actions">
+                  <span id="csv-editor-status" class="save-status">Ready</span>
+                  <button class="copy-button" id="csv-insert-table" type="button">Insert table</button>
+                  <button class="copy-button" id="csv-insert-diagram" type="button">Linked Mermaid</button>
+                  <button class="copy-button" id="csv-convert-diagram" type="button">CSV → diagram</button>
+                  <button class="copy-button" id="csv-close" type="button">Back to Markdown</button>
+                </div>
+              </div>
+              <div id="csv-spreadsheet" class="csv-spreadsheet"></div>
+            </section>
+
+            <section
               class="debug-markdown"
               id="debug-markdown-view"
               hidden

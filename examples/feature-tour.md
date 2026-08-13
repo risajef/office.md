@@ -61,6 +61,24 @@ flowchart LR
   edit --> share[Share]
 ```
 
+## CSV-backed Mermaid
+
+Open `csv-folder-demo/graph.csv` in the Files panel. The spreadsheet lets you
+edit the CSV, **Insert table** adds its current contents as a Markdown table,
+and **Linked Mermaid** creates a live diagram. CSV cell references such as
+`A2` and `B2` become labelled Mermaid nodes, so changing the spreadsheet
+updates the diagram preview.
+
+```mermaid(csv-folder-demo/graph.csv)
+flowchart LR
+  A2 --> B2
+  A3 --> B3
+  A4 --> B4
+```
+
+**CSV → diagram** makes a portable one-time flowchart from the first two CSV
+columns when a live template is not needed.
+
 ## Linked Markdown
 
 The Include buttons in the Files panel insert live links. Try including
@@ -74,4 +92,3 @@ The Include buttons in the Files panel insert live links. Try including
 - Create and rename browser-local files with the Files panel.
 - Open `examples/local-folder-demo` with **Open folder** to edit real files.
 - Open `examples/css-folder-demo` with **CSS folder** to load custom themes.
-

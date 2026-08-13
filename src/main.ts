@@ -35,7 +35,11 @@ import {
   requestText,
   tableContentConfig,
 } from './plugins/rich-content-plugin'
-import { mermaidPlugin } from './plugins/mermaid-plugin'
+import {
+  configureMermaidCsvResolver,
+  mermaidPlugin,
+  notifyMermaidCsvDataChanged,
+} from './plugins/mermaid-plugin'
 import {
   configureMarkdownIncludeRenderer,
   configureMarkdownIncludes,
@@ -52,12 +56,21 @@ import {
   type LocalDirectoryHandle,
   type LocalFileHandle,
 } from './local-file-system'
+import jspreadsheet from 'jspreadsheet-ce'
+import 'jspreadsheet-ce/dist/jspreadsheet.css'
+import {
+  csvToMarkdownTable,
+  csvToMermaidFlowchart,
+  normalizeCsvRows,
+  parseCsv,
+  serializeCsv,
+} from './csv-utils'
 
 // The examples are the dev workspace default. New storage versions prevent a
 // previous hard-coded demo from masking those files on the first run.
 const STORAGE_KEY = 'milkdown-minimal-editor-draft-v3'
-const FILES_STORAGE_KEY = 'milkdown-editor-files-v3'
-const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v3'
+const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
+const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
 const THEME_STORAGE_KEY = 'milkdown-editor-theme-v1'
 const EDITOR_WIDTH_KEY = 'milkdown-editor-width-v1'
 const MIN_EDITOR_WIDTH = 420
@@ -132,6 +145,15 @@ const openCssFolderButton = document.querySelector<HTMLButtonElement>('#open-css
 const folderStatus = document.querySelector<HTMLElement>('#folder-status')
 const cssFolderStatus = document.querySelector<HTMLElement>('#css-folder-status')
 const themeSelect = document.querySelector<HTMLSelectElement>('#document-theme')
+const editorCard = document.querySelector<HTMLElement>('.editor-card')
+const csvEditorCard = document.querySelector<HTMLElement>('#csv-editor-card')
+const csvEditorName = document.querySelector<HTMLElement>('#csv-editor-name')
+const csvSpreadsheetElement = document.querySelector<HTMLDivElement>('#csv-spreadsheet')
+const csvInsertTableButton = document.querySelector<HTMLButtonElement>('#csv-insert-table')
+const csvInsertDiagramButton = document.querySelector<HTMLButtonElement>('#csv-insert-diagram')
+const csvConvertDiagramButton = document.querySelector<HTMLButtonElement>('#csv-convert-diagram')
+const csvCloseButton = document.querySelector<HTMLButtonElement>('#csv-close')
+const csvEditorStatus = document.querySelector<HTMLElement>('#csv-editor-status')
 const workspaceLayout = document.querySelector<HTMLElement>('.workspace-layout')
 const editorWidthResizer = document.querySelector<HTMLElement>('#editor-width-resizer')
 const debugMarkdownView = document.querySelector<HTMLElement>(
@@ -147,6 +169,10 @@ const exampleMarkdownModules = import.meta.glob<string>(
 )
 const exampleCssModules = import.meta.glob<string>(
   '../examples/**/*.css',
+  { eager: true, query: '?raw', import: 'default' },
+)
+const exampleCsvModules = import.meta.glob<string>(
+  '../examples/**/*.csv',
   { eager: true, query: '?raw', import: 'default' },
 )
 
@@ -241,7 +267,7 @@ type WorkspaceFile = {
   id: string
   name: string
   markdown: string
-  kind: 'markdown' | 'css'
+  kind: 'markdown' | 'css' | 'csv'
   source?: 'browser' | 'folder'
   handle?: LocalFileHandle
 }
@@ -264,7 +290,16 @@ const exampleCssFiles = Object.entries(exampleCssModules)
     source: 'browser' as const,
   }))
 
-const exampleFiles = [...exampleMarkdownFiles, ...exampleCssFiles]
+const exampleCsvFiles = Object.entries(exampleCsvModules)
+  .map(([path, csv]) => ({
+    id: `example:${path}`,
+    name: path.replace(/^\.\.\/examples\//, ''),
+    markdown: csv,
+    kind: 'csv' as const,
+    source: 'browser' as const,
+  }))
+
+const exampleFiles = [...exampleMarkdownFiles, ...exampleCssFiles, ...exampleCsvFiles]
   .sort((left, right) => {
     const leftIsTour = left.name === 'feature-tour.md'
     const rightIsTour = right.name === 'feature-tour.md'
@@ -314,7 +349,9 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
       .map((file) => ({
         ...file,
         kind:
-          file.kind === 'css' || file.name.toLowerCase().endsWith('.css')
+          file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
+            ? 'csv' as const
+            : file.kind === 'css' || file.name.toLowerCase().endsWith('.css')
             ? 'css' as const
             : 'markdown' as const,
       }))
@@ -355,7 +392,21 @@ const resolveWorkspaceInclude = (fileName: string) => {
   return basenameMatches.length === 1 ? basenameMatches[0]?.markdown : undefined
 }
 
+const resolveWorkspaceCsv = (fileName: string) => {
+  const requested = fileName.trim().replace(/^\.\//, '')
+  const exact = workspaceFiles.find(
+    (file) => file.kind === 'csv' && file.name === requested,
+  )
+  if (exact) return exact.markdown
+
+  const matches = workspaceFiles.filter(
+    (file) => file.kind === 'csv' && file.name.endsWith(`/${requested}`),
+  )
+  return matches.length === 1 ? matches[0]?.markdown : undefined
+}
+
 configureMarkdownIncludes(resolveWorkspaceInclude)
+configureMermaidCsvResolver(resolveWorkspaceCsv)
 
 const persistWorkspace = () => {
   const persistedFiles = workspaceFiles.map(({ handle: _handle, ...file }) => file)
@@ -575,6 +626,21 @@ const renderFileList = (editor: EditorInstance) => {
       applyButton.title = `Apply ${file.name}`
       applyButton.addEventListener('click', () => applyCssFile(file))
       actions.append(applyButton)
+    } else if (file.kind === 'csv') {
+      const tableButton = document.createElement('button')
+      tableButton.type = 'button'
+      tableButton.className = 'file-action file-action-apply'
+      tableButton.textContent = 'Table'
+      tableButton.title = `Insert ${file.name} as a Markdown table`
+      tableButton.addEventListener('click', () => addCsvTable(editor, file))
+
+      const diagramButton = document.createElement('button')
+      diagramButton.type = 'button'
+      diagramButton.className = 'file-action file-action-apply'
+      diagramButton.textContent = 'Graph'
+      diagramButton.title = `Insert a Mermaid diagram from ${file.name}`
+      diagramButton.addEventListener('click', () => addCsvDiagram(editor, file))
+      actions.append(tableButton, diagramButton)
     } else {
       const injectButton = document.createElement('button')
       injectButton.type = 'button'
@@ -593,9 +659,11 @@ const renderFileList = (editor: EditorInstance) => {
     renameButton.textContent = '✎'
     renameButton.title = `Rename ${file.name}`
     renameButton.setAttribute('aria-label', `Rename ${file.name}`)
-    if (file.kind === 'css') {
+    if (file.kind === 'css' || file.kind === 'csv') {
       renameButton.disabled = true
-      renameButton.title = 'CSS files are applied from the workspace tree'
+      renameButton.title = file.kind === 'css'
+        ? 'CSS files are applied from the workspace tree'
+        : 'Rename CSV files in the local folder, then reopen it'
     } else if (file.source !== 'folder') {
       renameButton.addEventListener('click', () => {
         void renameFile(editor, file.id)
@@ -657,6 +725,187 @@ const renderFileList = (editor: EditorInstance) => {
   appendFolderContents(root, fileListElement)
 }
 
+type CsvWorksheet = {
+  getData: (highlighted?: boolean, processed?: boolean) => unknown[][]
+}
+
+let activeCsvWorksheet: CsvWorksheet | undefined
+let lastMarkdownFileId = workspaceFiles.find((file) => file.kind === 'markdown')?.id
+let workspaceEditor: EditorInstance | undefined
+
+const setCsvStatus = (message: string) => {
+  if (csvEditorStatus) csvEditorStatus.textContent = message
+}
+
+const persistActiveCsv = () => {
+  const file = activeFile()
+  if (file?.kind === 'csv' && activeCsvWorksheet) {
+    syncCsvFile(file, activeCsvWorksheet)
+  }
+}
+
+const destroyCsvEditor = () => {
+  try {
+    jspreadsheet.destroy(
+      csvSpreadsheetElement as Parameters<typeof jspreadsheet.destroy>[0],
+      true,
+    )
+  } catch {
+    // The container may not have finished initializing yet.
+  }
+  activeCsvWorksheet = undefined
+  csvSpreadsheetElement?.replaceChildren()
+}
+
+const showMarkdownEditor = () => {
+  persistActiveCsv()
+  destroyCsvEditor()
+  if (editorCard) editorCard.hidden = false
+  if (csvEditorCard) csvEditorCard.hidden = true
+  if (debugMarkdownView) debugMarkdownView.hidden = !isDebugMode
+}
+
+const showCsvEditor = () => {
+  if (editorCard) editorCard.hidden = true
+  if (csvEditorCard) csvEditorCard.hidden = false
+  if (debugMarkdownView) debugMarkdownView.hidden = true
+}
+
+const markdownTargetForCsvAction = (editor: EditorInstance) => {
+  const current = activeFile()
+  if (current?.kind === 'markdown') return current
+  const target = workspaceFiles.find((file) => file.id === lastMarkdownFileId)
+    ?? workspaceFiles.find((file) => file.kind === 'markdown')
+  if (!target) return undefined
+  openFile(editor, target.id)
+  return target
+}
+
+const insertBlockMarkdown = (
+  editor: EditorInstance,
+  markdown: string,
+  status: string,
+) => {
+  const parsed = editor.action((ctx) => ctx.get(parserCtx)(markdown))
+  if (!parsed.content.size) return false
+
+  const inserted = editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const { $from } = view.state.selection
+    const insertPosition =
+      $from.depth > 0 ? $from.after(1) : view.state.doc.content.size
+    const transaction = view.state.tr.insert(insertPosition, parsed.content)
+    if (!transaction.docChanged) return false
+    view.dispatch(transaction.scrollIntoView())
+    view.focus()
+    return true
+  })
+  if (inserted) setStatus(status, 'saved')
+  return inserted
+}
+
+const insertMermaidBlock = (
+  editor: EditorInstance,
+  language: string,
+  source: string,
+  status: string,
+) => {
+  const target = markdownTargetForCsvAction(editor)
+  if (!target) {
+    setStatus('Create a Markdown file first', 'ready')
+    return false
+  }
+
+  const markdown = `\`\`\`${language}\n${source.trim()}\n\`\`\``
+  return insertBlockMarkdown(editor, markdown, status)
+}
+
+const addCsvTable = (editor: EditorInstance, file: WorkspaceFile) => {
+  if (file.kind !== 'csv') return
+  if (!markdownTargetForCsvAction(editor)) {
+    setStatus('Create a Markdown file first', 'ready')
+    return
+  }
+  insertBlockMarkdown(
+    editor,
+    csvToMarkdownTable(file.markdown),
+    `Inserted ${file.name} as a Markdown table`,
+  )
+}
+
+const addCsvDiagram = (editor: EditorInstance, file: WorkspaceFile) => {
+  if (file.kind !== 'csv') return
+  insertMermaidBlock(
+    editor,
+    'mermaid',
+    csvToMermaidFlowchart(file.markdown),
+    `Inserted a diagram from ${file.name}`,
+  )
+}
+
+const addLinkedCsvDiagram = async (
+  editor: EditorInstance,
+  file: WorkspaceFile,
+) => {
+  if (file.kind !== 'csv') return
+  const template = await requestText({
+    title: `Link Mermaid to ${file.name}`,
+    label: 'Mermaid template (use CSV cells such as A2 or B2)',
+    value: 'flowchart LR\n  A2 --> B2\n  A3 --> B3',
+    submitLabel: 'Insert diagram',
+    multiline: true,
+  })
+  if (!template?.trim()) return
+  insertMermaidBlock(
+    editor,
+    `mermaid(${file.name})`,
+    template,
+    `Inserted a live diagram linked to ${file.name}`,
+  )
+}
+
+const syncCsvFile = (file: WorkspaceFile, worksheet: CsvWorksheet) => {
+  if (file.kind !== 'csv') return
+  const rows = worksheet
+    .getData(false, true)
+    .map((row) => row.map((cell) => String(cell ?? '')))
+  file.markdown = serializeCsv(normalizeCsvRows(rows))
+  persistWorkspace()
+  scheduleDiskSave(file)
+  notifyMermaidCsvDataChanged()
+  setCsvStatus('Changed · saved locally')
+}
+
+const openCsvFile = (file: WorkspaceFile) => {
+  if (file.kind !== 'csv' || !csvSpreadsheetElement) return
+  persistActiveCsv()
+  activeFileId = file.id
+  persistWorkspace()
+  if (workspaceEditor) renderFileList(workspaceEditor)
+  if (documentName) documentName.textContent = file.name
+  if (csvEditorName) csvEditorName.textContent = file.name
+  showCsvEditor()
+  destroyCsvEditor()
+
+  const rows = normalizeCsvRows(parseCsv(file.markdown))
+  const worksheets = jspreadsheet(csvSpreadsheetElement, {
+    onchange: (worksheet: unknown) => {
+      syncCsvFile(file, worksheet as unknown as CsvWorksheet)
+    },
+    worksheets: [
+      {
+        data: rows,
+        minDimensions: [rows[0]?.length ?? 1, rows.length],
+        tableOverflow: true,
+        tableHeight: 'min(68vh, 720px)',
+        csvDelimiter: ',',
+      },
+    ],
+  })
+  activeCsvWorksheet = worksheets[0] as unknown as CsvWorksheet | undefined
+  setCsvStatus(`${file.name} · ready to edit`)
+}
+
 const openFile = (editor: EditorInstance, fileId: string) => {
   const file = workspaceFiles.find((candidate) => candidate.id === fileId)
   if (!file) return
@@ -666,8 +915,15 @@ const openFile = (editor: EditorInstance, fileId: string) => {
     return
   }
 
+  if (file.kind === 'csv') {
+    openCsvFile(file)
+    return
+  }
+
   activeFileId = file.id
+  lastMarkdownFileId = file.id
   persistWorkspace()
+  showMarkdownEditor()
   if (documentName) documentName.textContent = file.name
   renderFileList(editor)
   loadMarkdown(editor, file.markdown)
@@ -839,6 +1095,7 @@ applyTheme(window.localStorage.getItem(THEME_STORAGE_KEY) ?? '')
 const refreshFolderFiles = async (editor: EditorInstance) => {
   if (!selectedDirectory) return
   let changed = false
+  let changedCsv = false
 
   for (const file of workspaceFiles) {
     if (!file.handle || file.id === activeFileId) continue
@@ -850,6 +1107,7 @@ const refreshFolderFiles = async (editor: EditorInstance) => {
         if (customThemeStyle?.dataset.workspaceTheme === file.id) {
           applyCssFile(file)
         }
+        if (file.kind === 'csv') changedCsv = true
         changed = true
       }
     } catch (error) {
@@ -860,6 +1118,7 @@ const refreshFolderFiles = async (editor: EditorInstance) => {
   if (!changed) return
   persistWorkspace()
   notifyMarkdownIncludesChanged()
+  if (changedCsv) notifyMermaidCsvDataChanged()
   scheduleOutlineUpdate(editor)
 }
 
@@ -890,9 +1149,11 @@ const openLocalFolder = async (editor: EditorInstance) => {
         id: `folder:${file.name}`,
         name: file.name,
         markdown: file.markdown,
-        kind: file.name.toLowerCase().endsWith('.css')
-          ? ('css' as const)
-          : ('markdown' as const),
+        kind: file.name.toLowerCase().endsWith('.csv')
+          ? ('csv' as const)
+          : file.name.toLowerCase().endsWith('.css')
+            ? ('css' as const)
+            : ('markdown' as const),
         source: 'folder' as const,
         handle: file.handle,
       })),
@@ -909,7 +1170,13 @@ const openLocalFolder = async (editor: EditorInstance) => {
     if (documentName && file) documentName.textContent = file.name
     renderFileList(editor)
     renderThemeOptions()
-    if (file) loadMarkdown(editor, file.markdown)
+    if (file?.kind === 'markdown') {
+      lastMarkdownFileId = file.id
+      showMarkdownEditor()
+      loadMarkdown(editor, file.markdown)
+    } else if (file?.kind === 'csv') {
+      openCsvFile(file)
+    }
     notifyMarkdownIncludesChanged()
     folderRefreshTimer = window.setInterval(() => {
       void refreshFolderFiles(editor)
@@ -974,6 +1241,7 @@ const startEditor = async () => {
   if (currentMarkdownFile && currentMarkdownFile.id !== activeFileId) {
     activeFileId = currentMarkdownFile.id
   }
+  if (currentMarkdownFile) lastMarkdownFileId = currentMarkdownFile.id
   const currentMarkdown = currentMarkdownFile?.markdown ?? initialMarkdown
   setStatus(storedMarkdown ? 'Saved locally' : 'Ready to write', 'ready')
   const initialText = currentMarkdown.trim()
@@ -1041,6 +1309,7 @@ const startEditor = async () => {
     .create()
 
   editorInstance = editor
+  workspaceEditor = editor
   configureMarkdownIncludeRenderer((markdown) =>
     editor.action((ctx) => ctx.get(parserCtx)(markdown)),
   )
@@ -1069,6 +1338,27 @@ const startEditor = async () => {
     applyTheme(themeSelect.value)
   })
 
+  csvInsertTableButton?.addEventListener('click', () => {
+    const file = activeFile()
+    if (file?.kind === 'csv') addCsvTable(editor, file)
+  })
+
+  csvInsertDiagramButton?.addEventListener('click', () => {
+    const file = activeFile()
+    if (file?.kind === 'csv') void addLinkedCsvDiagram(editor, file)
+  })
+
+  csvConvertDiagramButton?.addEventListener('click', () => {
+    const file = activeFile()
+    if (file?.kind === 'csv') addCsvDiagram(editor, file)
+  })
+
+  csvCloseButton?.addEventListener('click', () => {
+    const target = workspaceFiles.find((file) => file.id === lastMarkdownFileId)
+      ?? workspaceFiles.find((file) => file.kind === 'markdown')
+    if (target) openFile(editor, target.id)
+  })
+
   copyButton?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(getMarkdown(editor))
     const originalLabel = copyButton.textContent
@@ -1082,6 +1372,7 @@ const startEditor = async () => {
     if (folderRefreshTimer !== undefined) {
       window.clearInterval(folderRefreshTimer)
     }
+    persistActiveCsv()
     persistWorkspace()
     editor.destroy()
   })

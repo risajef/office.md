@@ -73,8 +73,11 @@ const createMathView = (
 
     const render = (node: MathNode) => {
       currentNode = node
+      const value = node.attrs.value.trim()
       element.dataset.value = node.attrs.value
-      renderFormula(element, node.attrs.value, displayMode)
+      element.hidden = !value && !editing
+      if (value) renderFormula(element, value, displayMode)
+      else element.replaceChildren()
     }
 
     const finishEditing = (save: boolean) => {
@@ -88,8 +91,9 @@ const createMathView = (
       sourceEditor = undefined
       element.classList.remove('is-editing')
       element.replaceChildren()
+      element.hidden = !value.trim()
       element.dataset.value = value
-      renderFormula(element, value, displayMode)
+      if (value.trim()) renderFormula(element, value, displayMode)
 
       if (typeof position === 'number') {
         view.dispatch(
@@ -109,6 +113,7 @@ const createMathView = (
       editor.spellcheck = false
       sourceEditor = editor
       element.classList.add('is-editing')
+      element.hidden = false
       element.replaceChildren(editor)
 
       editor.addEventListener('blur', () => finishEditing(true), {

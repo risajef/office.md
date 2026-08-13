@@ -3,6 +3,7 @@ import type { NodeViewConstructor } from '@milkdown/kit/prose/view'
 import { $view } from '@milkdown/kit/utils'
 import mermaid from 'mermaid'
 import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
+import { expandCsvReferences } from '../csv-utils'
 
 mermaid.initialize({
   startOnLoad: false,
@@ -11,9 +12,29 @@ mermaid.initialize({
 })
 
 let renderSequence = 0
+let resolveCsvSource: (fileName: string) => string | undefined = () => undefined
+
+const csvDataChangedEvent = 'milkdown-csv-data-changed'
+
+export const configureMermaidCsvResolver = (
+  resolver: (fileName: string) => string | undefined,
+) => {
+  resolveCsvSource = resolver
+}
+
+export const notifyMermaidCsvDataChanged = () => {
+  window.dispatchEvent(new Event(csvDataChangedEvent))
+}
 
 const isMermaidBlock = (node: Node) =>
-  String(node.attrs.language ?? '').trim().toLowerCase() === 'mermaid'
+  /^mermaid(?:\(([^)]+)\))?$/i.test(String(node.attrs.language ?? '').trim())
+
+const getCsvSourceName = (node: Node) => {
+  const match = String(node.attrs.language ?? '')
+    .trim()
+    .match(/^mermaid\(([^)]+)\)$/i)
+  return match?.[1]?.trim()
+}
 
 const createCodeView = (initialNode: Node): ReturnType<NodeViewConstructor> => {
   const dom = document.createElement('pre')
@@ -68,13 +89,23 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     currentNode = node
     const code = node.textContent.trim()
     sourceCode.textContent = code
+    dom.hidden = !code && !editing
+    if (!code) {
+      preview.replaceChildren()
+      preview.classList.remove('has-error')
+      return
+    }
+
+    const csvFileName = getCsvSourceName(node)
+    const csvSource = csvFileName ? resolveCsvSource(csvFileName) : undefined
+    const renderCode = csvSource ? expandCsvReferences(code, csvSource) : code
     const renderId = ++renderSequence
     currentRender = renderId
     preview.classList.remove('has-error')
     preview.textContent = 'Rendering diagram…'
 
     mermaid
-      .render(`milkdown-mermaid-${renderId}`, code)
+      .render(`milkdown-mermaid-${renderId}`, renderCode)
       .then(({ svg }) => {
         if (currentRender === renderId) preview.innerHTML = svg
       })
@@ -103,7 +134,10 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
       const codeBlock = view.state.schema.nodes.code_block
       if (!codeBlock) return
       const content = code ? view.state.schema.text(code) : undefined
-      const replacement = codeBlock.create({ language: 'mermaid' }, content)
+      const replacement = codeBlock.create(
+        { language: currentNode.attrs.language ?? 'mermaid' },
+        content,
+      )
       const node = view.state.doc.nodeAt(position)
       if (!node) return
       render(replacement)
@@ -126,6 +160,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     editor.spellcheck = false
     sourceEditor = editor
     dom.classList.add('is-editing')
+    dom.hidden = false
     dom.replaceChildren(editor)
 
     editor.addEventListener('blur', () => finishEditing(true), { once: true })
@@ -150,6 +185,10 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
 
   preview.addEventListener('click', startEditing)
   document.addEventListener('pointerdown', onDocumentPointerDown)
+  const onCsvDataChanged = () => {
+    if (!editing && getCsvSourceName(currentNode)) render(currentNode)
+  }
+  window.addEventListener(csvDataChangedEvent, onCsvDataChanged)
   queueMicrotask(() => {
     render(initialNode)
     if (!initialNode.textContent.trim()) startEditing()
@@ -170,6 +209,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
       currentRender = -1
       preview.removeEventListener('click', startEditing)
       document.removeEventListener('pointerdown', onDocumentPointerDown)
+      window.removeEventListener(csvDataChangedEvent, onCsvDataChanged)
       dom.remove()
     },
   }

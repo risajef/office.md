@@ -142,11 +142,42 @@ h1 em {
 }
 
 .editor-card {
+  overflow: visible;
+  border: 1px solid #deded6;
+  border-radius: 17px;
+  background: var(--paper);
+  box-shadow: 0 20px 50px rgb(38 38 29 / 7%), 0 2px 8px rgb(38 38 29 / 3%);
+}
+
+.csv-editor-card {
   overflow: hidden;
   border: 1px solid #deded6;
   border-radius: 17px;
   background: var(--paper);
   box-shadow: 0 20px 50px rgb(38 38 29 / 7%), 0 2px 8px rgb(38 38 29 / 3%);
+}
+
+.csv-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.csv-editor-actions .save-status {
+  margin-right: 4px;
+}
+
+.csv-spreadsheet {
+  min-height: 420px;
+  overflow: auto;
+  padding: 18px;
+  background: color-mix(in srgb, var(--page-bg) 70%, var(--paper));
+}
+
+.csv-spreadsheet .jss {
+  margin: 0 auto;
 }
 
 .debug-markdown {
@@ -203,13 +234,17 @@ h1 em {
 }
 
 .rich-toolbar-host {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   min-height: 47px;
   align-items: center;
   overflow-x: auto;
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
-  background: #f7f7f3;
+  background: var(--paper);
+  box-shadow: 0 5px 12px rgb(38 38 29 / 6%);
 }
 
 .rich-toolbar-host:empty {
@@ -1183,6 +1218,16 @@ body.is-resizing .workspace-resizer::before {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.file-row[data-file-kind="csv"] .file-select {
+  color: #4f57a6;
+}
+
+.file-row[data-file-kind="csv"] .file-select::before {
+  content: "▦ ";
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .file-select {
   min-width: 0;
   flex: 1;
@@ -1282,6 +1327,36 @@ body.is-resizing .workspace-resizer::before {
   color: var(--ink);
   font-size: 18px;
   letter-spacing: -0.03em;
+}
+
+.formula-choice-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 158px;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid #d9d7f3;
+  border-radius: 9px;
+  background: #292842;
+  box-shadow: 0 10px 28px rgb(34 32 77 / 22%);
+}
+
+.formula-choice-menu button {
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  color: #f1f0ff;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.formula-choice-menu button:hover,
+.formula-choice-menu button:focus-visible {
+  background: #5149ad;
+  outline: none;
 }
 
 .source-dialog-card label {

@@ -38,6 +38,7 @@ type Command =
   | 'bullet_list'
   | 'ordered_list'
   | 'blockquote'
+  | 'table'
   | 'code_block'
   | 'formula'
   | 'diagram'
@@ -138,6 +139,7 @@ const commands: Array<[label: string, title: string, command: Command]> = [
   ['•', 'Bullet list', 'bullet_list'],
   ['1.', 'Numbered list', 'ordered_list'],
   ['❝', 'Blockquote', 'blockquote'],
+  ['▦', 'Insert table', 'table'],
   ['Code', 'Code block', 'code_block'],
   ['↗', 'Add link', 'link'],
   ['∑', 'Insert LaTeX formula', 'formula'],
@@ -262,6 +264,125 @@ const applyFormula = (view: EditorView) => {
   }
 }
 
+const applyFormulaBlock = (view: EditorView) => {
+  const formula = view.state.schema.nodes.math_block
+  if (!formula) return false
+
+  try {
+    const { $from } = view.state.selection
+    const insertPosition =
+      $from.depth > 0 ? $from.after(1) : view.state.doc.content.size
+    const transaction = view.state.tr.insert(
+      insertPosition,
+      formula.create({ value: '' }),
+    )
+    if (!transaction.docChanged) return false
+    view.dispatch(transaction)
+    return true
+  } catch (error) {
+    console.error('Could not insert a formula block.', error)
+    return false
+  }
+}
+
+const applyTable = async (view: EditorView) => {
+  const dimensions = await requestText({
+    title: 'Insert table',
+    label: 'Body rows × columns (for example, 3x3)',
+    value: '3x3',
+    submitLabel: 'Insert table',
+    multiline: false,
+  })
+  const match = dimensions?.trim().match(/^(\d+)\s*[x×]\s*(\d+)$/i)
+  if (!match) return false
+
+  const bodyRows = Math.min(30, Math.max(1, Number(match[1])))
+  const columns = Math.min(15, Math.max(1, Number(match[2])))
+  const { schema } = view.state
+  const table = schema.nodes.table
+  const tableRow = schema.nodes.table_row
+  const tableCell = schema.nodes.table_cell
+  const tableHeader = schema.nodes.table_header ?? tableCell
+  const paragraph = schema.nodes.paragraph
+  if (!table || !tableRow || !tableCell || !paragraph) return false
+
+  const makeCell = (cellType: typeof tableCell, text: string) =>
+    cellType.create(null, paragraph.create(null, text ? schema.text(text) : undefined))
+  const header = tableRow.create(
+    null,
+    Array.from({ length: columns }, (_, index) =>
+      makeCell(tableHeader, `Header ${index + 1}`),
+    ),
+  )
+  const rows = Array.from({ length: bodyRows }, (_, rowIndex) =>
+    tableRow.create(
+      null,
+      Array.from({ length: columns }, (_, columnIndex) =>
+        makeCell(tableCell, `Cell ${rowIndex + 1}.${columnIndex + 1}`),
+      ),
+    ),
+  )
+  const tableNode = table.create(null, [header, ...rows])
+  const { $from } = view.state.selection
+  const insertPosition =
+    $from.depth > 0 ? $from.after(1) : view.state.doc.content.size
+  const transaction = view.state.tr.insert(insertPosition, tableNode)
+  if (!transaction.docChanged) return false
+  view.dispatch(transaction.scrollIntoView())
+  view.focus()
+  return true
+}
+
+const formulaChoiceMenu = document.createElement('div')
+formulaChoiceMenu.className = 'formula-choice-menu'
+formulaChoiceMenu.setAttribute('role', 'menu')
+formulaChoiceMenu.innerHTML = `
+  <button type="button" data-formula-kind="inline" role="menuitem">Inline formula</button>
+  <button type="button" data-formula-kind="block" role="menuitem">Formula block</button>
+`
+
+let formulaChoiceCleanup: (() => void) | undefined
+
+const hideFormulaChoice = () => {
+  formulaChoiceCleanup?.()
+  formulaChoiceCleanup = undefined
+  formulaChoiceMenu.remove()
+}
+
+const showFormulaChoice = (view: EditorView, anchor: HTMLElement) => {
+  hideFormulaChoice()
+  document.body.append(formulaChoiceMenu)
+  const bounds = anchor.getBoundingClientRect()
+  formulaChoiceMenu.style.left = `${Math.min(
+    window.innerWidth - formulaChoiceMenu.offsetWidth - 12,
+    Math.max(12, bounds.left),
+  )}px`
+  formulaChoiceMenu.style.top = `${bounds.bottom + 8}px`
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (!formulaChoiceMenu.contains(event.target as Node)) hideFormulaChoice()
+  }
+  const onClick = (event: MouseEvent) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+      '[data-formula-kind]',
+    )
+    if (!button) return
+    event.preventDefault()
+    const inserted = button.dataset.formulaKind === 'block'
+      ? applyFormulaBlock(view)
+      : applyFormula(view)
+    if (inserted) view.focus()
+    hideFormulaChoice()
+    document.removeEventListener('pointerdown', onPointerDown)
+  }
+  formulaChoiceMenu.addEventListener('click', onClick)
+  document.addEventListener('pointerdown', onPointerDown)
+  formulaChoiceCleanup = () => {
+    formulaChoiceMenu.removeEventListener('click', onClick)
+    document.removeEventListener('pointerdown', onPointerDown)
+  }
+}
+
 const applyDiagram = (view: EditorView) => {
   const codeBlock = view.state.schema.nodes.code_block
   if (!codeBlock) return false
@@ -287,6 +408,7 @@ const applyCommand = async (view: EditorView, command: Command) => {
   if (command === 'blockquote') return applyBlockquote(view)
   if (command === 'link') return applyLink(view)
   if (command === 'formula') return applyFormula(view)
+  if (command === 'table') return applyTable(view)
   if (command === 'diagram') return applyDiagram(view)
   if (command === 'heading1' || command === 'heading2') {
     const heading = view.state.schema.nodes.heading
@@ -383,8 +505,12 @@ export const richContentConfig = (ctx: Ctx) => {
 
         event.preventDefault()
         const command = button.dataset.command as Command
+        if (command === 'formula') {
+          showFormulaChoice(view, button)
+          return
+        }
         void applyCommand(view, command).then(() => {
-          if (command !== 'formula' && command !== 'diagram') view.focus()
+          if (command !== 'diagram') view.focus()
         })
       }
       const onSelectionChange = () => syncActiveButtons(view)
