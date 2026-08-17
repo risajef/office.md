@@ -1,3 +1,4 @@
-- [ ] including a different markdown should not add it as a code block but render the content at that place
-- [ ] formula edit should not show `$$` or `\ [`
-- [ ] The file viewer on the left should show folders that can be opened and collapsed
+- [x] including a different markdown should not add it as a code block but render the content at that place
+- [x] formula edit should not show `$$` or `\ [`
+- [x] The file viewer on the left should show folders that can be opened and collapsed
+- [x] There should be the possibility to view a document in pages. With page breaks. This might be yet another milkdown extension.

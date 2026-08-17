@@ -187,8 +187,10 @@ const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
     dom,
     update: (updatedNode) => {
       if (updatedNode.type !== initialNode.type) return false
-      currentNode = updatedNode
-      render()
+      if (!updatedNode.eq(currentNode)) {
+        currentNode = updatedNode
+        render()
+      }
       return true
     },
     stopEvent: () => true,

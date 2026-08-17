@@ -148,7 +148,9 @@ const createMathView = (
       dom: element,
       update: (updatedNode) => {
         if (updatedNode.type !== initialNode.type) return false
-        if (!editing) render(updatedNode as MathNode)
+        if (!editing && !updatedNode.eq(currentNode)) {
+          render(updatedNode as MathNode)
+        }
         return true
       },
       stopEvent: () => editing,

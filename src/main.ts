@@ -36,6 +36,12 @@ import {
   tableContentConfig,
 } from './plugins/rich-content-plugin'
 import {
+  pageLayoutPlugin,
+  requestPageLayoutRefresh,
+  type PageLayoutSettings,
+  type PageMode,
+} from './plugins/page-layout-plugin'
+import {
   configureMermaidCsvResolver,
   mermaidPlugin,
   notifyMermaidCsvDataChanged,
@@ -71,10 +77,56 @@ import {
 const STORAGE_KEY = 'milkdown-minimal-editor-draft-v3'
 const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
-const THEME_STORAGE_KEY = 'milkdown-editor-theme-v1'
 const EDITOR_WIDTH_KEY = 'milkdown-editor-width-v1'
+const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v1'
 const MIN_EDITOR_WIDTH = 420
 const DEFAULT_EDITOR_WIDTH = 720
+
+type PagePreset = 'a4-portrait' | 'a4-landscape' | 'slide-16-9' | 'custom'
+
+type PageFormatSettings = {
+  preset: PagePreset
+  width: number
+  height: number
+  margin: number
+}
+
+type StoredPageSettings = {
+  mode: PageMode
+  document: PageFormatSettings
+  presentation: PageFormatSettings
+}
+
+const defaultPageSettings = (): StoredPageSettings => ({
+  mode: 'continuous',
+  document: {
+    preset: 'a4-portrait',
+    width: 794,
+    height: 1123,
+    margin: 56,
+  },
+  presentation: {
+    preset: 'slide-16-9',
+    width: 960,
+    height: 540,
+    margin: 48,
+  },
+})
+
+const readPageSettings = () => {
+  const stored = window.localStorage.getItem(PAGE_SETTINGS_KEY)
+  if (!stored) return {} as Record<string, StoredPageSettings>
+  try {
+    const parsed = JSON.parse(stored) as unknown
+    return parsed && typeof parsed === 'object'
+      ? parsed as Record<string, StoredPageSettings>
+      : {}
+  } catch {
+    return {} as Record<string, StoredPageSettings>
+  }
+}
+
+const pageSettingsByFile = readPageSettings()
 const starterMarkdown = `# Milkdown feature tour
 
 This document demonstrates the editor's rich content plugins. Edit the source or use the formatting buttons above.
@@ -131,6 +183,26 @@ This is a live transclusion. Edit notes.md and this preview updates when the doc
 
 `
 
+const normalizeMarkdownBreaks = (markdown: string) =>
+  markdown.replace(/<br\s*\/?\s*>/gi, (match, offset: number, source: string) => {
+    const lineStart = source.lastIndexOf('\n', offset) + 1
+    const lineEnd = source.indexOf('\n', offset)
+    const end = lineEnd < 0 ? source.length : lineEnd
+    const line = source.slice(lineStart, end)
+    const relativeOffset = offset - lineStart
+    const cellStart = line.lastIndexOf('|', relativeOffset - 1) + 1
+    const cellText = line.slice(cellStart, relativeOffset).trim()
+    if (/^\s*\|/.test(line) && !cellText) return ''
+    return '\\' + '\n'
+  })
+
+const commonmarkPlugins = commonmark.filter(
+  (plugin) =>
+    !String(
+      (plugin as { meta?: { displayName?: string } }).meta?.displayName ?? '',
+    ).includes('remarkPreserveEmptyLine'),
+)
+
 const editorRoot = document.querySelector<HTMLDivElement>('#editor')
 const copyButton = document.querySelector<HTMLButtonElement>('#copy-markdown')
 const statsElement = document.querySelector<HTMLSpanElement>('#document-stats')
@@ -138,13 +210,16 @@ const statusLabel = document.querySelector<HTMLSpanElement>('#save-status-label'
 const statusDot = document.querySelector<HTMLSpanElement>('.status-dot')
 const documentName = document.querySelector<HTMLElement>('#document-name')
 const outlineElement = document.querySelector<HTMLElement>('#document-outline')
+const layoutModeSelect = document.querySelector<HTMLSelectElement>('#layout-mode')
+const pageFormatSelect = document.querySelector<HTMLSelectElement>('#page-format')
+const pageSettingsButton = document.querySelector<HTMLButtonElement>('#page-settings')
+const presentButton = document.querySelector<HTMLButtonElement>('#present-document')
+const pageCountElement = document.querySelector<HTMLElement>('#page-count')
 const fileListElement = document.querySelector<HTMLUListElement>('#file-list')
 const newFileButton = document.querySelector<HTMLButtonElement>('#new-file')
 const openFolderButton = document.querySelector<HTMLButtonElement>('#open-folder')
 const openCssFolderButton = document.querySelector<HTMLButtonElement>('#open-css-folder')
 const folderStatus = document.querySelector<HTMLElement>('#folder-status')
-const cssFolderStatus = document.querySelector<HTMLElement>('#css-folder-status')
-const themeSelect = document.querySelector<HTMLSelectElement>('#document-theme')
 const editorCard = document.querySelector<HTMLElement>('.editor-card')
 const csvEditorCard = document.querySelector<HTMLElement>('#csv-editor-card')
 const csvEditorName = document.querySelector<HTMLElement>('#csv-editor-name')
@@ -276,7 +351,7 @@ const exampleMarkdownFiles = Object.entries(exampleMarkdownModules)
   .map(([path, markdown]) => ({
     id: `example:${path}`,
     name: path.replace(/^\.\.\/examples\//, ''),
-    markdown,
+    markdown: normalizeMarkdownBreaks(markdown),
     kind: 'markdown' as const,
     source: 'browser' as const,
   }))
@@ -348,6 +423,12 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
       )
       .map((file) => ({
         ...file,
+        markdown:
+          file.kind === 'csv' || file.kind === 'css' ||
+          file.name.toLowerCase().endsWith('.csv') ||
+          file.name.toLowerCase().endsWith('.css')
+            ? file.markdown
+            : normalizeMarkdownBreaks(file.markdown),
         kind:
           file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
             ? 'csv' as const
@@ -369,7 +450,6 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
 }
 
 let selectedDirectory: LocalDirectoryHandle | undefined
-let cssThemes = new Map<string, string>()
 const diskSaveTimers = new Map<string, number>()
 const collapsedFolders = new Set<string>()
 let folderRefreshTimer: number | undefined
@@ -517,7 +597,7 @@ const scheduleOutlineUpdate = (editor: EditorInstance) => {
 }
 
 const loadMarkdown = (editor: EditorInstance, markdown: string) => {
-  const parsed = editor.action((ctx) => ctx.get(parserCtx)(markdown))
+  const parsed = editor.action((ctx) => ctx.get(parserCtx)(normalizeMarkdownBreaks(markdown)))
   editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
     view.dispatch(
@@ -618,35 +698,30 @@ const renderFileList = (editor: EditorInstance) => {
     const actions = document.createElement('div')
     actions.className = 'file-actions'
 
-    if (file.kind === 'css') {
-      const applyButton = document.createElement('button')
-      applyButton.type = 'button'
-      applyButton.className = 'file-action file-action-apply'
-      applyButton.textContent = 'Apply'
-      applyButton.title = `Apply ${file.name}`
-      applyButton.addEventListener('click', () => applyCssFile(file))
-      actions.append(applyButton)
-    } else if (file.kind === 'csv') {
+    if (file.kind === 'csv') {
       const tableButton = document.createElement('button')
       tableButton.type = 'button'
       tableButton.className = 'file-action file-action-apply'
-      tableButton.textContent = 'Table'
+      tableButton.textContent = '▤'
       tableButton.title = `Insert ${file.name} as a Markdown table`
+      tableButton.setAttribute('aria-label', `Insert ${file.name} as a Markdown table`)
       tableButton.addEventListener('click', () => addCsvTable(editor, file))
 
       const diagramButton = document.createElement('button')
       diagramButton.type = 'button'
       diagramButton.className = 'file-action file-action-apply'
-      diagramButton.textContent = 'Graph'
+      diagramButton.textContent = '⌁'
       diagramButton.title = `Insert a Mermaid diagram from ${file.name}`
+      diagramButton.setAttribute('aria-label', `Insert a Mermaid diagram from ${file.name}`)
       diagramButton.addEventListener('click', () => addCsvDiagram(editor, file))
       actions.append(tableButton, diagramButton)
     } else {
       const injectButton = document.createElement('button')
       injectButton.type = 'button'
       injectButton.className = 'file-action'
-      injectButton.textContent = 'Include'
+      injectButton.textContent = '↗'
       injectButton.title = `Add a live include for ${file.name}`
+      injectButton.setAttribute('aria-label', `Add a live include for ${file.name}`)
       injectButton.addEventListener('click', () => {
         addMarkdownInclude(editor, file)
       })
@@ -732,6 +807,251 @@ type CsvWorksheet = {
 let activeCsvWorksheet: CsvWorksheet | undefined
 let lastMarkdownFileId = workspaceFiles.find((file) => file.kind === 'markdown')?.id
 let workspaceEditor: EditorInstance | undefined
+let presentationReturnMode: PageMode = 'continuous'
+let presentationPageIndex = 0
+let isPresenting = false
+
+const pagePresetValues: PagePreset[] = [
+  'a4-portrait',
+  'a4-landscape',
+  'slide-16-9',
+  'custom',
+]
+
+const isPagePreset = (value: unknown): value is PagePreset =>
+  typeof value === 'string' && pagePresetValues.includes(value as PagePreset)
+
+const normalizePageFormat = (
+  value: unknown,
+  fallback: PageFormatSettings,
+): PageFormatSettings => {
+  if (!value || typeof value !== 'object') return { ...fallback }
+  const candidate = value as Partial<PageFormatSettings>
+  return {
+    preset: isPagePreset(candidate.preset) ? candidate.preset : fallback.preset,
+    width: typeof candidate.width === 'number' && candidate.width > 200
+      ? candidate.width
+      : fallback.width,
+    height: typeof candidate.height === 'number' && candidate.height > 200
+      ? candidate.height
+      : fallback.height,
+    margin: typeof candidate.margin === 'number' && candidate.margin >= 0
+      ? candidate.margin
+      : fallback.margin,
+  }
+}
+
+const pageSettingsFor = (fileId: string) => {
+  const fallback = defaultPageSettings()
+  const stored = pageSettingsByFile[fileId]
+  const normalized: StoredPageSettings = {
+    mode: stored?.mode === 'document' || stored?.mode === 'presentation'
+      ? stored.mode
+      : fallback.mode,
+    document: normalizePageFormat(stored?.document, fallback.document),
+    presentation: normalizePageFormat(stored?.presentation, fallback.presentation),
+  }
+  pageSettingsByFile[fileId] = normalized
+  return normalized
+}
+
+const persistPageSettings = () => {
+  window.localStorage.setItem(PAGE_SETTINGS_KEY, JSON.stringify(pageSettingsByFile))
+}
+
+const activePageSettings = () => {
+  const file = activeFile()
+  return file ? pageSettingsFor(file.id) : defaultPageSettings()
+}
+
+const activePageLayoutSettings = (): PageLayoutSettings => {
+  const settings = activePageSettings()
+  const format = settings.mode === 'presentation'
+    ? settings.presentation
+    : settings.document
+  return {
+    mode: settings.mode,
+    width: format.width,
+    height: format.height,
+    margin: format.margin,
+  }
+}
+
+const setPageCount = (pageCount: number) => {
+  if (!pageCountElement) return
+  pageCountElement.textContent = pageCount
+    ? `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`
+    : ''
+}
+
+const renderPageFormatOptions = () => {
+  if (!pageFormatSelect) return
+  const settings = activePageSettings()
+  if (layoutModeSelect) layoutModeSelect.value = settings.mode
+  const options = settings.mode === 'document'
+    ? [
+        ['a4-portrait', 'A4 portrait'],
+        ['a4-landscape', 'A4 landscape'],
+        ['custom', 'Custom'],
+      ]
+    : [
+        ['slide-16-9', '16:9 landscape'],
+        ['custom', 'Custom'],
+      ]
+  pageFormatSelect.replaceChildren()
+  options.forEach(([value, label]) => {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = label
+    pageFormatSelect.append(option)
+  })
+  pageFormatSelect.value = options.some(([value]) => value === settings[settings.mode === 'presentation' ? 'presentation' : 'document'].preset)
+    ? settings[settings.mode === 'presentation' ? 'presentation' : 'document'].preset
+    : 'custom'
+  const showPageControls = settings.mode !== 'continuous'
+  pageFormatSelect.closest<HTMLElement>('.layout-control')?.toggleAttribute('hidden', !showPageControls)
+  pageSettingsButton?.toggleAttribute('hidden', !showPageControls)
+}
+
+const requestCustomPageSize = async (editor: EditorInstance) => {
+  const settings = activePageSettings()
+  const format = settings.mode === 'presentation' ? settings.presentation : settings.document
+  const value = await requestText({
+    title: 'Adjust page size',
+    label: 'Width × height, margin (for example, 794x1123, 56)',
+    value: `${format.width}x${format.height}, ${format.margin}`,
+    submitLabel: 'Apply size',
+    multiline: false,
+  })
+  const match = value?.trim().match(
+    /^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)(?:\s*[,;]\s*(\d+(?:\.\d+)?))?$/i,
+  )
+  if (!match) return
+  format.preset = 'custom'
+  format.width = Number(match[1])
+  format.height = Number(match[2])
+  format.margin = Number(match[3] ?? format.margin)
+  persistPageSettings()
+  renderPageFormatOptions()
+  editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
+}
+
+const applyPagePreset = (editor: EditorInstance, preset: PagePreset) => {
+  const settings = activePageSettings()
+  const format = settings.mode === 'presentation' ? settings.presentation : settings.document
+  if (preset === 'a4-portrait') {
+    format.width = 794
+    format.height = 1123
+    format.margin = 56
+  } else if (preset === 'a4-landscape') {
+    format.width = 1123
+    format.height = 794
+    format.margin = 56
+  } else if (preset === 'slide-16-9') {
+    format.width = 960
+    format.height = 540
+    format.margin = 48
+  }
+  format.preset = preset
+  persistPageSettings()
+  renderPageFormatOptions()
+  editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
+}
+
+const updateLayoutMode = (editor: EditorInstance, mode: PageMode) => {
+  const settings = activePageSettings()
+  settings.mode = mode
+  persistPageSettings()
+  renderPageFormatOptions()
+  editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
+}
+
+const presentationPageStarts = () => {
+  const wrap = editorRoot?.closest<HTMLElement>('.editor-wrap')
+  if (!wrap || !editorRoot) return [0]
+  const pageSurface = editorRoot.querySelector<HTMLElement>('.ProseMirror')
+  if (!pageSurface) return [0]
+  const wrapBounds = wrap.getBoundingClientRect()
+  const scale = Number.parseFloat(
+    pageSurface.style.getPropertyValue('--page-scale') || '1',
+  )
+  const pageMargin = Number.parseFloat(
+    pageSurface.style.getPropertyValue('--page-margin') || '0',
+  )
+  const renderedMargin = pageMargin * scale
+  const starts = [0]
+  editorRoot.querySelectorAll<HTMLElement>(
+    '.page-layout-break-before[data-page-break]',
+  ).forEach((marker) => {
+    const bounds = marker.getBoundingClientRect()
+    starts.push(Math.max(
+      0,
+      wrap.scrollTop + bounds.top - wrapBounds.top - renderedMargin,
+    ))
+  })
+  return [...new Set(starts)]
+}
+
+const scrollToPresentationPage = (direction: -1 | 1) => {
+  const wrap = editorRoot?.closest<HTMLElement>('.editor-wrap')
+  if (!wrap) return
+  const starts = presentationPageStarts()
+  presentationPageIndex = Math.min(
+    starts.length - 1,
+    Math.max(0, presentationPageIndex + direction),
+  )
+  wrap.scrollTo({ top: starts[presentationPageIndex] ?? 0, behavior: 'smooth' })
+}
+
+const enterPresentation = async (editor: EditorInstance) => {
+  const settings = activePageSettings()
+  presentationReturnMode = settings.mode
+  settings.mode = 'presentation'
+  persistPageSettings()
+  isPresenting = true
+  presentationPageIndex = 0
+  document.body.classList.add('is-presenting')
+  if (presentButton) presentButton.textContent = 'Exit presentation'
+  renderPageFormatOptions()
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    view.setProps({ editable: () => false })
+    requestPageLayoutRefresh(view)
+  })
+  try {
+    await document.documentElement.requestFullscreen?.()
+  } catch {
+    // The app remains in its presentation shell when browser fullscreen is unavailable.
+  }
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior })
+    const wrap = editorRoot?.closest<HTMLElement>('.editor-wrap')
+    wrap?.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior })
+  })
+}
+
+const exitPresentation = async (editor: EditorInstance) => {
+  isPresenting = false
+  document.body.classList.remove('is-presenting')
+  if (document.fullscreenElement) {
+    try {
+      await document.exitFullscreen()
+    } catch {
+      // Browser fullscreen may already have been closed by the user.
+    }
+  }
+  const settings = activePageSettings()
+  settings.mode = presentationReturnMode
+  persistPageSettings()
+  if (presentButton) presentButton.textContent = 'Present'
+  renderPageFormatOptions()
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    view.setProps({ editable: () => true })
+    requestPageLayoutRefresh(view)
+    view.focus()
+  })
+}
 
 const setCsvStatus = (message: string) => {
   if (csvEditorStatus) csvEditorStatus.textContent = message
@@ -742,6 +1062,42 @@ const persistActiveCsv = () => {
   if (file?.kind === 'csv' && activeCsvWorksheet) {
     syncCsvFile(file, activeCsvWorksheet)
   }
+}
+
+const storeActiveFile = async () => {
+  persistActiveCsv()
+  const file = activeFile()
+  if (!file) return false
+
+  if (file.kind === 'markdown' && workspaceEditor) {
+    file.markdown = getMarkdown(workspaceEditor)
+    window.localStorage.setItem(STORAGE_KEY, file.markdown)
+  }
+  persistWorkspace()
+
+  if (file.handle) {
+    try {
+      await writeLocalTextFile({ handle: file.handle, markdown: file.markdown })
+      setStatus(`Stored ${file.name} in the folder`, 'saved')
+    } catch (error) {
+      console.error(`Could not store ${file.name}.`, error)
+      setStatus(`Could not store ${file.name}`, 'ready')
+      return false
+    }
+  } else {
+    setStatus(`Stored ${file.name} locally`, 'saved')
+  }
+  return true
+}
+
+const reloadProject = () => {
+  window.localStorage.removeItem(FILES_STORAGE_KEY)
+  window.localStorage.removeItem(STORAGE_KEY)
+  window.localStorage.removeItem(ACTIVE_FILE_KEY)
+
+  const url = new URL(window.location.href)
+  url.searchParams.set('reload', String(Date.now()))
+  window.location.assign(url.href)
 }
 
 const destroyCsvEditor = () => {
@@ -850,7 +1206,7 @@ const addLinkedCsvDiagram = async (
   if (file.kind !== 'csv') return
   const template = await requestText({
     title: `Link Mermaid to ${file.name}`,
-    label: 'Mermaid template (use CSV cells such as A2 or B2)',
+    label: 'Mermaid template (use cells such as A2 or ranges such as A2:A7)',
     value: 'flowchart LR\n  A2 --> B2\n  A3 --> B3',
     submitLabel: 'Insert diagram',
     multiline: true,
@@ -926,6 +1282,7 @@ const openFile = (editor: EditorInstance, fileId: string) => {
   showMarkdownEditor()
   if (documentName) documentName.textContent = file.name
   renderFileList(editor)
+  renderPageFormatOptions()
   loadMarkdown(editor, file.markdown)
   setStatus('Opened locally', 'ready')
 }
@@ -996,101 +1353,17 @@ const createNewFile = async (editor: EditorInstance) => {
   openFile(editor, file.id)
 }
 
-const WORKSPACE_CSS_PREFIX = 'workspace-css:'
 let customThemeStyle: HTMLStyleElement | undefined
-
-const workspaceCssFiles = () =>
-  workspaceFiles.filter((file) => file.kind === 'css')
-
-const workspaceCssTheme = (theme: string) =>
-  theme.startsWith(WORKSPACE_CSS_PREFIX)
-    ? workspaceFiles.find(
-        (file) => `${WORKSPACE_CSS_PREFIX}${file.id}` === theme && file.kind === 'css',
-      )
-    : undefined
 
 const applyCssFile = (file: WorkspaceFile) => {
   if (file.kind !== 'css') return
-  applyTheme(`${WORKSPACE_CSS_PREFIX}${file.id}`)
+  customThemeStyle?.remove()
+  customThemeStyle = document.createElement('style')
+  customThemeStyle.dataset.workspaceTheme = file.id
+  customThemeStyle.textContent = file.markdown
+  document.head.append(customThemeStyle)
   setStatus(`Applied ${file.name}`, 'saved')
 }
-
-const renderThemeOptions = () => {
-  if (!themeSelect) return
-  const selected = themeSelect.value
-  themeSelect.replaceChildren()
-
-  if (cssThemes.size) {
-    const group = document.createElement('optgroup')
-    group.label = 'CSS folder'
-    for (const name of cssThemes.keys()) {
-      const option = document.createElement('option')
-      option.value = name
-      option.textContent = name.replace(/^css:/, '')
-      group.append(option)
-    }
-    themeSelect.append(group)
-  }
-
-  const cssFiles = workspaceCssFiles()
-  if (cssFiles.length) {
-    const group = document.createElement('optgroup')
-    group.label = 'Workspace CSS'
-    cssFiles.forEach((file) => {
-      const option = document.createElement('option')
-      option.value = `${WORKSPACE_CSS_PREFIX}${file.id}`
-      option.textContent = file.name
-      group.append(option)
-    })
-    themeSelect.append(group)
-  }
-
-  const availableThemes = [
-    ...cssThemes.keys(),
-    ...cssFiles.map((file) => `${WORKSPACE_CSS_PREFIX}${file.id}`),
-  ]
-  if (availableThemes.includes(selected)) {
-    themeSelect.value = selected
-  }
-}
-
-const applyTheme = (theme: string) => {
-  customThemeStyle?.remove()
-  customThemeStyle = undefined
-
-  if (cssThemes.has(theme)) {
-    document.documentElement.dataset.theme = 'custom'
-    customThemeStyle = document.createElement('style')
-    customThemeStyle.dataset.folderTheme = theme
-    customThemeStyle.textContent = cssThemes.get(theme) ?? ''
-    document.head.append(customThemeStyle)
-  } else if (workspaceCssTheme(theme)) {
-    const file = workspaceCssTheme(theme)
-    document.documentElement.dataset.theme = 'custom'
-    customThemeStyle = document.createElement('style')
-    customThemeStyle.dataset.workspaceTheme = file?.id ?? ''
-    customThemeStyle.textContent = file?.markdown ?? ''
-    document.head.append(customThemeStyle)
-  } else {
-    const firstWorkspaceTheme = workspaceCssFiles()[0]
-    const firstFolderTheme = cssThemes.keys().next().value as string | undefined
-    const fallbackTheme = firstWorkspaceTheme
-      ? `${WORKSPACE_CSS_PREFIX}${firstWorkspaceTheme.id}`
-      : firstFolderTheme
-    if (fallbackTheme) {
-      applyTheme(fallbackTheme)
-      return
-    }
-    document.documentElement.dataset.theme = 'custom'
-    theme = ''
-  }
-
-  window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-  if (themeSelect) themeSelect.value = theme
-}
-
-renderThemeOptions()
-applyTheme(window.localStorage.getItem(THEME_STORAGE_KEY) ?? '')
 
 const refreshFolderFiles = async (editor: EditorInstance) => {
   if (!selectedDirectory) return
@@ -1148,7 +1421,9 @@ const openLocalFolder = async (editor: EditorInstance) => {
       ...localFiles.map((file) => ({
         id: `folder:${file.name}`,
         name: file.name,
-        markdown: file.markdown,
+        markdown: file.name.toLowerCase().endsWith('.md')
+          ? normalizeMarkdownBreaks(file.markdown)
+          : file.markdown,
         kind: file.name.toLowerCase().endsWith('.csv')
           ? ('csv' as const)
           : file.name.toLowerCase().endsWith('.css')
@@ -1169,7 +1444,7 @@ const openLocalFolder = async (editor: EditorInstance) => {
     const file = activeFile()
     if (documentName && file) documentName.textContent = file.name
     renderFileList(editor)
-    renderThemeOptions()
+    renderPageFormatOptions()
     if (file?.kind === 'markdown') {
       lastMarkdownFileId = file.id
       showMarkdownEditor()
@@ -1195,13 +1470,10 @@ const openCssFolder = async (editor: EditorInstance) => {
     if (!directory) return
     const cssFiles = await readLocalCssFiles(directory)
     if (!cssFiles.length) {
-      if (cssFolderStatus) cssFolderStatus.textContent = `${directory.name} · no CSS files`
+      if (folderStatus) folderStatus.textContent = `${directory.name} · no CSS files`
       return
     }
 
-    cssThemes = new Map(
-      cssFiles.map((file) => [`css:${file.name}`, file.markdown]),
-    )
     const remainingFiles = workspaceFiles.filter(
       (file) => !file.id.startsWith('css-folder:'),
     )
@@ -1220,15 +1492,12 @@ const openCssFolder = async (editor: EditorInstance) => {
     )
     persistWorkspace()
     renderFileList(editor)
-    renderThemeOptions()
-    if (cssFolderStatus) {
-      cssFolderStatus.textContent = `${directory.name} · ${cssFiles.length} CSS themes`
+    if (folderStatus) {
+      folderStatus.textContent = `${directory.name} · ${cssFiles.length} CSS files`
     }
-    const firstTheme = [...cssThemes.keys()][0]
-    if (firstTheme) applyTheme(firstTheme)
   } catch (error) {
     console.error('Could not open CSS folder.', error)
-    if (cssFolderStatus) cssFolderStatus.textContent = 'CSS folder unavailable'
+    if (folderStatus) folderStatus.textContent = 'CSS folder unavailable'
   }
 }
 
@@ -1279,12 +1548,18 @@ const startEditor = async () => {
     .use(remarkMarkdownIncludePlugin)
     .use(markdownIncludeSchema)
     .use(markdownIncludeView)
-    .use(commonmark)
+    .use(commonmarkPlugins)
     .use(gfm)
     .use(mermaidPlugin)
     .use(history)
     .use(clipboard)
     .use(prism)
+    .use(
+      pageLayoutPlugin({
+        getSettings: activePageLayoutSettings,
+        onPageCountChange: setPageCount,
+      }),
+    )
     .use(listener)
     .use(richContentPlugin)
     .use(
@@ -1319,8 +1594,48 @@ const startEditor = async () => {
     documentName.textContent = currentMarkdownFile.name
   }
   renderFileList(editor)
+  renderPageFormatOptions()
   setDebugMarkdown(getMarkdown(editor))
   scheduleOutlineUpdate(editor)
+
+  layoutModeSelect?.addEventListener('change', () => {
+    updateLayoutMode(editor, layoutModeSelect.value as PageMode)
+  })
+
+  pageFormatSelect?.addEventListener('change', () => {
+    const preset = pageFormatSelect.value as PagePreset
+    if (preset === 'custom') void requestCustomPageSize(editor)
+    else applyPagePreset(editor, preset)
+  })
+
+  pageSettingsButton?.addEventListener('click', () => {
+    void requestCustomPageSize(editor)
+  })
+
+  presentButton?.addEventListener('click', () => {
+    if (isPresenting) void exitPresentation(editor)
+    else void enterPresentation(editor)
+  })
+
+  window.addEventListener('keydown', (event) => {
+    if (!isPresenting) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      void exitPresentation(editor)
+      return
+    }
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
+      event.preventDefault()
+      scrollToPresentationPage(1)
+    } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
+      event.preventDefault()
+      scrollToPresentationPage(-1)
+    }
+  })
+
+  document.addEventListener('fullscreenchange', () => {
+    if (isPresenting && !document.fullscreenElement) void exitPresentation(editor)
+  })
 
   newFileButton?.addEventListener('click', () => {
     void createNewFile(editor)
@@ -1334,8 +1649,14 @@ const startEditor = async () => {
     void openCssFolder(editor)
   })
 
-  themeSelect?.addEventListener('change', () => {
-    applyTheme(themeSelect.value)
+  document.querySelectorAll<HTMLButtonElement>('[data-project-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.dataset.projectAction === 'reload') {
+        void reloadProject()
+      } else {
+        void storeActiveFile()
+      }
+    })
   })
 
   csvInsertTableButton?.addEventListener('click', () => {

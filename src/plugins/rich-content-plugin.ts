@@ -1,4 +1,5 @@
 import type { Ctx } from '@milkdown/kit/ctx'
+import { getMarkRange } from '@milkdown/kit/prose'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { redo, undo } from '@milkdown/kit/prose/history'
 import {
@@ -15,6 +16,7 @@ import {
   addRowBefore,
   deleteColumn,
   deleteRow,
+  deleteTable,
   isInTable,
   selectedRect,
 } from '@milkdown/kit/prose/tables'
@@ -227,14 +229,29 @@ const applyLink = async (view: EditorView) => {
   const mark = view.state.schema.marks.link
   if (!mark) return false
 
+  const currentRange = getMarkRange(view.state.selection.$from, mark)
+  const currentHref = currentRange?.mark.attrs.href
+  const isEditing = Boolean(currentRange)
+
   const href = await requestText({
-    title: 'Add link',
+    title: isEditing ? 'Edit link' : 'Add link',
     label: 'Link URL',
-    value: 'https://',
-    submitLabel: 'Add link',
+    value: currentHref || 'https://',
+    submitLabel: isEditing ? 'Update link' : 'Add link',
     multiline: false,
   })
   if (!href) return false
+
+  if (currentRange) {
+    const transaction = view.state.tr.addMark(
+      currentRange.from,
+      currentRange.to,
+      mark.create({ href, title: currentRange.mark.attrs.title ?? null }),
+    )
+    if (!transaction.docChanged) return false
+    view.dispatch(transaction)
+    return true
+  }
 
   return toggleMark(mark, { href, title: null })(view.state, view.dispatch)
 }
@@ -441,6 +458,16 @@ const applyTableCommand = (view: EditorView, command: TableCommand) => {
     const rect = selectedRect(view.state)
     // The schema requires the header row — deleting it would corrupt the table.
     if (command === 'delete-row' && rect.top === 0) return false
+    if (command === 'delete-column' && rect.map.width === 1) {
+      return deleteTable(view.state, view.dispatch)
+    }
+    if (
+      command === 'delete-row' &&
+      rect.map.height === 2 &&
+      rect.top > 0
+    ) {
+      return deleteTable(view.state, view.dispatch)
+    }
     // Inserting a row before the header row should insert after it instead.
     if (command === 'add-row-before' && rect.top === 0) {
       return addRowAfter(view.state, view.dispatch)

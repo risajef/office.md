@@ -30,11 +30,44 @@
               <span class="file-icon" aria-hidden="true">✦</span>
               <span id="document-name">untitled.md</span>
             </div>
+            <div class="layout-controls" aria-label="Document view controls">
+              <label class="layout-control">
+                <span>View</span>
+                <select id="layout-mode" aria-label="Document view">
+                  <option value="continuous">Continuous</option>
+                  <option value="document">Document pages</option>
+                  <option value="presentation">Presentation slides</option>
+                </select>
+              </label>
+              <label class="layout-control" id="page-format-control">
+                <span>Page</span>
+                <select id="page-format" aria-label="Page format"></select>
+              </label>
+              <button class="copy-button page-settings-button" id="page-settings" type="button">
+                Adjust
+              </button>
+              <span class="page-count" id="page-count" aria-live="polite"></span>
+              <button class="copy-button present-button" id="present-document" type="button">
+                Present
+              </button>
+            </div>
             <div class="toolbar-actions">
               <span class="save-status" id="save-status">
                 <span class="status-dot" aria-hidden="true"></span>
                 <span id="save-status-label">Ready to write</span>
               </span>
+              <button
+                class="copy-button project-action"
+                data-project-action="store"
+                type="button"
+                title="Store the current file"
+              >Store file</button>
+              <button
+                class="copy-button project-action"
+                data-project-action="reload"
+                type="button"
+                title="Reload project files from disk and clear the cached workspace"
+              >Reload project</button>
               <button class="copy-button" id="copy-markdown" type="button">
                 Copy markdown
               </button>
@@ -65,6 +98,18 @@
                 </div>
                 <div class="csv-editor-actions">
                   <span id="csv-editor-status" class="save-status">Ready</span>
+                  <button
+                    class="copy-button project-action"
+                    data-project-action="store"
+                    type="button"
+                    title="Store the current file"
+                  >Store file</button>
+                  <button
+                    class="copy-button project-action"
+                    data-project-action="reload"
+                    type="button"
+                    title="Reload project files from disk and clear the cached workspace"
+                  >Reload project</button>
                   <button class="copy-button" id="csv-insert-table" type="button">Insert table</button>
                   <button class="copy-button" id="csv-insert-diagram" type="button">Linked Mermaid</button>
                   <button class="copy-button" id="csv-convert-diagram" type="button">CSV → diagram</button>
@@ -99,7 +144,7 @@
             tabindex="0"
           ></div>
 
-          <aside class="workspace-sidebar" aria-label="Workspace files and themes">
+          <aside class="workspace-sidebar" aria-label="Workspace files">
             <section class="sidebar-section files-section">
               <div class="sidebar-heading">
                 <h2>Files</h2>
@@ -113,11 +158,6 @@
               <ul class="file-list" id="file-list"></ul>
             </section>
 
-            <section class="sidebar-section theme-section">
-              <label class="sidebar-label" for="document-theme">Theme</label>
-              <select id="document-theme" aria-label="Apply a CSS theme"></select>
-              <p class="folder-status" id="css-folder-status">CSS themes come from files</p>
-            </section>
           </aside>
         </div>
 

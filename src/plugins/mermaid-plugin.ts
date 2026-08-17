@@ -200,7 +200,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
       if (updatedNode.type !== initialNode.type || !isMermaidBlock(updatedNode)) {
         return false
       }
-      if (!editing) render(updatedNode)
+      if (!editing && !updatedNode.eq(currentNode)) render(updatedNode)
       return true
     },
     stopEvent: () => editing,
