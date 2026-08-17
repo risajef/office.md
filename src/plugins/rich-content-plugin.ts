@@ -16,6 +16,7 @@ import {
   deleteColumn,
   deleteRow,
   isInTable,
+  selectedRect,
 } from '@milkdown/kit/prose/tables'
 import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
 import { TooltipProvider, tooltipFactory } from '@milkdown/plugin-tooltip'
@@ -194,10 +195,10 @@ tableToolbar.setAttribute('aria-label', 'Table toolbar')
 tableToolbar.append(
   createTableButton('↑ Row', 'Insert row before', 'add-row-before'),
   createTableButton('↓ Row', 'Insert row after', 'add-row-after'),
-  createTableButton('− Row', 'Delete row', 'delete-row'),
+  createTableButton('- Row', 'Delete row', 'delete-row'),
   createTableButton('← Col', 'Insert column before', 'add-column-before'),
   createTableButton('→ Col', 'Insert column after', 'add-column-after'),
-  createTableButton('− Col', 'Delete column', 'delete-column'),
+  createTableButton('- Col', 'Delete column', 'delete-column'),
 )
 
 const provider = new TooltipProvider({
@@ -301,6 +302,7 @@ const applyTable = async (view: EditorView) => {
   const { schema } = view.state
   const table = schema.nodes.table
   const tableRow = schema.nodes.table_row
+  const tableHeaderRow = schema.nodes.table_header_row ?? tableRow
   const tableCell = schema.nodes.table_cell
   const tableHeader = schema.nodes.table_header ?? tableCell
   const paragraph = schema.nodes.paragraph
@@ -308,7 +310,7 @@ const applyTable = async (view: EditorView) => {
 
   const makeCell = (cellType: typeof tableCell, text: string) =>
     cellType.create(null, paragraph.create(null, text ? schema.text(text) : undefined))
-  const header = tableRow.create(
+  const header = tableHeaderRow.create(
     null,
     Array.from({ length: columns }, (_, index) =>
       makeCell(tableHeader, `Header ${index + 1}`),
@@ -435,6 +437,15 @@ const applyCommand = async (view: EditorView, command: Command) => {
 }
 
 const applyTableCommand = (view: EditorView, command: TableCommand) => {
+  if (isInTable(view.state)) {
+    const rect = selectedRect(view.state)
+    // The schema requires the header row — deleting it would corrupt the table.
+    if (command === 'delete-row' && rect.top === 0) return false
+    // Inserting a row before the header row should insert after it instead.
+    if (command === 'add-row-before' && rect.top === 0) {
+      return addRowAfter(view.state, view.dispatch)
+    }
+  }
   const commands: Record<
     TableCommand,
     (state: Parameters<typeof isInTable>[0], dispatch?: EditorView['dispatch']) => boolean
