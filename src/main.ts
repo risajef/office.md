@@ -30,6 +30,7 @@ import {
   remarkMathPlugin,
 } from './plugins/latex-plugin'
 import {
+  configureDiagramCommand,
   richContentConfig,
   richContentPlugin,
   requestText,
@@ -45,6 +46,7 @@ import {
   configureMermaidCsvResolver,
   mermaidPlugin,
   notifyMermaidCsvDataChanged,
+  notifyMermaidThemeChanged,
 } from './plugins/mermaid-plugin'
 import {
   configureMarkdownIncludeRenderer,
@@ -55,32 +57,58 @@ import {
   remarkMarkdownIncludePlugin,
 } from './plugins/markdown-include-plugin'
 import {
+  ensureLocalPermission,
   pickLocalDirectory,
-  readLocalCssFiles,
+  queryLocalPermission,
   readLocalTextFiles,
+  renameLocalTextFile,
+  rememberLocalDirectory,
+  restoreLocalDirectory,
   writeLocalTextFile,
   type LocalDirectoryHandle,
+  type LocalEntryHandle,
   type LocalFileHandle,
+  type LocalTextFile,
 } from './local-file-system'
+import {
+  getLocalServerCapabilities,
+  openLocalServerWorkspace,
+  renameLocalServerFile,
+  reloadLocalServerWorkspace,
+  writeLocalServerFile,
+  type LocalServerSnapshot,
+  type LocalServerWorkspace,
+} from './local-server-file-system'
+import { isEditableTextFile } from './editable-files'
 import jspreadsheet from 'jspreadsheet-ce'
 import 'jspreadsheet-ce/dist/jspreadsheet.css'
 import {
   csvToMarkdownTable,
-  csvToMermaidFlowchart,
   normalizeCsvRows,
   parseCsv,
   serializeCsv,
 } from './csv-utils'
+import { CsvContextToolbar } from './csv-context-toolbar'
+import { pickLocalServerFolder } from './folder-picker'
+import { requestChoice } from './choice-dialog'
+import { createPortableMarkdown } from './portable-markdown'
+import {
+  createDocumentExportHtml,
+  printDocumentHtml,
+  type DocumentExportLayout,
+} from './document-export'
+import { createIcon, hydrateIcons, setIcon } from './icons'
 
 // The examples are the dev workspace default. New storage versions prevent a
 // previous hard-coded demo from masking those files on the first run.
 const STORAGE_KEY = 'milkdown-minimal-editor-draft-v3'
 const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
-const EDITOR_WIDTH_KEY = 'milkdown-editor-width-v1'
-const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v1'
-const MIN_EDITOR_WIDTH = 420
-const DEFAULT_EDITOR_WIDTH = 720
+const EDITOR_WIDTH_KEY = 'milkdown-editor-width-v2'
+const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
+const LOCAL_SERVER_PATH_KEY = 'milkdown-editor-local-server-path-v1'
+const MIN_EDITOR_WIDTH = 520
+const DEFAULT_EDITOR_WIDTH = 960
 
 type PagePreset = 'a4-portrait' | 'a4-landscape' | 'slide-16-9' | 'custom'
 
@@ -98,7 +126,7 @@ type StoredPageSettings = {
 }
 
 const defaultPageSettings = (): StoredPageSettings => ({
-  mode: 'continuous',
+  mode: 'document',
   document: {
     preset: 'a4-portrait',
     width: 794,
@@ -209,6 +237,9 @@ const statsElement = document.querySelector<HTMLSpanElement>('#document-stats')
 const statusLabel = document.querySelector<HTMLSpanElement>('#save-status-label')
 const statusDot = document.querySelector<HTMLSpanElement>('.status-dot')
 const documentName = document.querySelector<HTMLElement>('#document-name')
+const renameDocumentButton = document.querySelector<HTMLButtonElement>(
+  '#rename-document',
+)
 const outlineElement = document.querySelector<HTMLElement>('#document-outline')
 const layoutModeSelect = document.querySelector<HTMLSelectElement>('#layout-mode')
 const pageFormatSelect = document.querySelector<HTMLSelectElement>('#page-format')
@@ -218,15 +249,16 @@ const pageCountElement = document.querySelector<HTMLElement>('#page-count')
 const fileListElement = document.querySelector<HTMLUListElement>('#file-list')
 const newFileButton = document.querySelector<HTMLButtonElement>('#new-file')
 const openFolderButton = document.querySelector<HTMLButtonElement>('#open-folder')
-const openCssFolderButton = document.querySelector<HTMLButtonElement>('#open-css-folder')
 const folderStatus = document.querySelector<HTMLElement>('#folder-status')
 const editorCard = document.querySelector<HTMLElement>('.editor-card')
 const csvEditorCard = document.querySelector<HTMLElement>('#csv-editor-card')
 const csvEditorName = document.querySelector<HTMLElement>('#csv-editor-name')
+const renameCsvDocumentButton = document.querySelector<HTMLButtonElement>(
+  '#rename-csv-document',
+)
 const csvSpreadsheetElement = document.querySelector<HTMLDivElement>('#csv-spreadsheet')
 const csvInsertTableButton = document.querySelector<HTMLButtonElement>('#csv-insert-table')
 const csvInsertDiagramButton = document.querySelector<HTMLButtonElement>('#csv-insert-diagram')
-const csvConvertDiagramButton = document.querySelector<HTMLButtonElement>('#csv-convert-diagram')
 const csvCloseButton = document.querySelector<HTMLButtonElement>('#csv-close')
 const csvEditorStatus = document.querySelector<HTMLElement>('#csv-editor-status')
 const workspaceLayout = document.querySelector<HTMLElement>('.workspace-layout')
@@ -234,7 +266,7 @@ const editorWidthResizer = document.querySelector<HTMLElement>('#editor-width-re
 const debugMarkdownView = document.querySelector<HTMLElement>(
   '#debug-markdown-view',
 )
-const debugMarkdownContent = document.querySelector<HTMLElement>(
+const debugMarkdownContent = document.querySelector<HTMLTextAreaElement>(
   '#debug-markdown-content',
 )
 const isDebugMode = import.meta.env.DEV
@@ -250,6 +282,8 @@ const exampleCsvModules = import.meta.glob<string>(
   '../examples/**/*.csv',
   { eager: true, query: '?raw', import: 'default' },
 )
+
+hydrateIcons()
 
 if (debugMarkdownView) debugMarkdownView.hidden = !isDebugMode
 
@@ -343,7 +377,7 @@ type WorkspaceFile = {
   name: string
   markdown: string
   kind: 'markdown' | 'css' | 'csv'
-  source?: 'browser' | 'folder'
+  source?: 'browser' | 'folder' | 'server'
   handle?: LocalFileHandle
 }
 
@@ -450,39 +484,128 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
 }
 
 let selectedDirectory: LocalDirectoryHandle | undefined
-const diskSaveTimers = new Map<string, number>()
+let selectedServerWorkspace: LocalServerWorkspace | undefined
+const dirtyDiskFiles = new Set<string>()
+const evaluatedCsvSources = new Map<string, string>()
 const collapsedFolders = new Set<string>()
-let folderRefreshTimer: number | undefined
+let workspaceActionPending = false
+let isLoadingMarkdown = false
+
+const runWorkspaceAction = async (action: () => Promise<unknown>) => {
+  if (workspaceActionPending) return
+  workspaceActionPending = true
+  const controls = [
+    openFolderButton,
+    newFileButton,
+    ...document.querySelectorAll<HTMLButtonElement>('[data-project-action]'),
+    ...document.querySelectorAll<HTMLButtonElement>('[data-file-export]'),
+  ].filter((control): control is HTMLButtonElement => Boolean(control))
+  controls.forEach((control) => { control.disabled = true })
+  try {
+    await action()
+  } finally {
+    controls.forEach((control) => { control.disabled = false })
+    workspaceActionPending = false
+  }
+}
+
+const workspaceKindForName = (name: string): WorkspaceFile['kind'] => {
+  const lowerName = name.toLowerCase()
+  if (lowerName.endsWith('.csv')) return 'csv'
+  if (lowerName.endsWith('.css')) return 'css'
+  return 'markdown'
+}
+
+const workspaceFilesFromDirectory = (
+  directory: LocalDirectoryHandle,
+  localFiles: LocalTextFile[],
+): WorkspaceFile[] => localFiles.map((file) => {
+  const kind = workspaceKindForName(file.name)
+  return {
+    id: `folder:${directory.name}/${file.name}`,
+    name: file.name,
+    markdown: kind === 'markdown'
+      ? normalizeMarkdownBreaks(file.markdown)
+      : file.markdown,
+    kind,
+    source: 'folder',
+    handle: file.handle,
+  }
+})
+
+const workspaceFilesFromServer = (
+  snapshot: LocalServerSnapshot,
+): WorkspaceFile[] => snapshot.files.map((file) => {
+  const kind = workspaceKindForName(file.name)
+  return {
+    id: `server:${snapshot.workspace.path}/${file.name}`,
+    name: file.name,
+    markdown: kind === 'markdown'
+      ? normalizeMarkdownBreaks(file.markdown)
+      : file.markdown,
+    kind,
+    source: 'server',
+  }
+})
+
+const replaceWorkspaceFiles = (
+  files: WorkspaceFile[],
+  preferredFileName?: string,
+) => {
+  evaluatedCsvSources.clear()
+  workspaceFiles.splice(0, workspaceFiles.length, ...files)
+  const preferred = files.find((file) => file.name === preferredFileName)
+  const nextActive = preferred
+    ?? files.find((file) => file.name === 'feature-tour.md')
+    ?? files.find((file) => file.kind === 'markdown' && !file.name.includes('/'))
+    ?? files.find((file) => file.kind === 'markdown')
+    ?? files.find((file) => file.kind === 'csv')
+    ?? files[0]
+  activeFileId = nextActive?.id ?? ''
+  if (nextActive?.kind === 'markdown') lastMarkdownFileId = nextActive.id
+  persistWorkspace()
+}
+
+const isDiskBackedFile = (file: WorkspaceFile | undefined) =>
+  file?.source === 'folder' || file?.source === 'server'
+
+const findWorkspaceFile = (
+  fileName: string,
+  kinds: ReadonlySet<WorkspaceFile['kind']>,
+) => {
+  const requested = fileName.trim().replace(/^\.\//, '')
+  const includeable = (file: WorkspaceFile) => kinds.has(file.kind)
+  const exact = workspaceFiles.find(
+    (file) => includeable(file) && file.name === requested,
+  )
+  const pathMatches = workspaceFiles.filter(
+    (file) => includeable(file) && file.name.endsWith(`/${requested}`),
+  )
+  const basenameMatches = workspaceFiles.filter(
+    (file) => includeable(file) && file.name.split('/').at(-1) === requested,
+  )
+  return exact
+    ?? (pathMatches.length === 1 ? pathMatches[0] : undefined)
+    ?? (basenameMatches.length === 1 ? basenameMatches[0] : undefined)
+}
+
+const markdownAndCsvKinds = new Set<WorkspaceFile['kind']>(['markdown', 'csv'])
+const csvKinds = new Set<WorkspaceFile['kind']>(['csv'])
+
+const csvSourceForFile = (file: WorkspaceFile) =>
+  evaluatedCsvSources.get(file.id) ?? file.markdown
 
 const resolveWorkspaceInclude = (fileName: string) => {
-  const requested = fileName.trim().replace(/^\.\//, '')
-  const exact = workspaceFiles.find(
-    (file) => file.kind === 'markdown' && file.name === requested,
-  )
-  if (exact) return exact.markdown
-
-  const pathMatches = workspaceFiles.filter((file) =>
-    file.kind === 'markdown' && file.name.endsWith(`/${requested}`),
-  )
-  if (pathMatches.length === 1) return pathMatches[0]?.markdown
-
-  const basenameMatches = workspaceFiles.filter(
-    (file) => file.kind === 'markdown' && file.name.split('/').at(-1) === requested,
-  )
-  return basenameMatches.length === 1 ? basenameMatches[0]?.markdown : undefined
+  const file = findWorkspaceFile(fileName, markdownAndCsvKinds)
+  if (!file) return undefined
+  return file.kind === 'csv'
+    ? csvToMarkdownTable(csvSourceForFile(file))
+    : file.markdown
 }
 
 const resolveWorkspaceCsv = (fileName: string) => {
-  const requested = fileName.trim().replace(/^\.\//, '')
-  const exact = workspaceFiles.find(
-    (file) => file.kind === 'csv' && file.name === requested,
-  )
-  if (exact) return exact.markdown
-
-  const matches = workspaceFiles.filter(
-    (file) => file.kind === 'csv' && file.name.endsWith(`/${requested}`),
-  )
-  return matches.length === 1 ? matches[0]?.markdown : undefined
+  const file = findWorkspaceFile(fileName, csvKinds)
+  return file?.kind === 'csv' ? csvSourceForFile(file) : undefined
 }
 
 configureMarkdownIncludes(resolveWorkspaceInclude)
@@ -496,6 +619,25 @@ const persistWorkspace = () => {
 
 const activeFile = () =>
   workspaceFiles.find((file) => file.id === activeFileId) ?? workspaceFiles[0]
+
+const updateDocumentNameControls = (file = activeFile()) => {
+  const fallbackName = selectedDirectory || selectedServerWorkspace
+    ? 'No editable files'
+    : 'untitled.md'
+  const name = file?.name ?? fallbackName
+  if (documentName) documentName.textContent = name
+  if (file?.kind === 'csv' && csvEditorName) csvEditorName.textContent = name
+
+  const controls = [renameDocumentButton, renameCsvDocumentButton]
+  for (const control of controls) {
+    if (!control) continue
+    control.disabled = !file
+    const label = file ? `Rename ${file.name}` : 'No file to rename'
+    control.title = label
+    control.dataset.tooltip = label
+    control.setAttribute('aria-label', label)
+  }
+}
 
 const makeFileId = () =>
   globalThis.crypto?.randomUUID?.() ?? `file-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -521,6 +663,38 @@ const uniqueFileName = (name: string, exceptId?: string) => {
   return candidate
 }
 
+const fileExtension = (name: string) => {
+  const baseName = name.split('/').at(-1) ?? ''
+  const dot = baseName.lastIndexOf('.')
+  return dot > 0 ? baseName.slice(dot) : ''
+}
+
+const normalizedRenameName = (requestedName: string, file: WorkspaceFile) => {
+  let name = requestedName.trim().replaceAll('\\', '/')
+  while (name.startsWith('./')) name = name.slice(2)
+  if (!name || name.startsWith('/')) {
+    throw new Error('Enter a path inside the open folder.')
+  }
+  const parts = name.split('/')
+  if (parts.some((part) => !part || part === '.' || part === '..')) {
+    throw new Error('The file path is invalid.')
+  }
+
+  const currentExtension = fileExtension(file.name)
+  if (currentExtension && !fileExtension(name)) name += currentExtension
+  if (!isEditableTextFile(name)) throw new Error('That file type is not editable.')
+  if (workspaceKindForName(name) !== file.kind) {
+    throw new Error(`Keep the ${currentExtension || file.kind} file type when renaming.`)
+  }
+  const collision = workspaceFiles.find(
+    (candidate) =>
+      candidate.id !== file.id &&
+      candidate.name.toLowerCase() === name.toLowerCase(),
+  )
+  if (collision) throw new Error(`A file named ${name} already exists.`)
+  return name
+}
+
 const setStats = ({ words, characters }: DocumentStats) => {
   if (!statsElement) return
   statsElement.textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${characters} ${characters === 1 ? 'character' : 'characters'}`
@@ -528,31 +702,106 @@ const setStats = ({ words, characters }: DocumentStats) => {
 
 const setStatus = (label: string, state: 'ready' | 'saving' | 'saved') => {
   if (!statusLabel || !statusDot) return
-  statusLabel.textContent = label
+  const status = statusLabel.closest<HTMLElement>('.save-status')
+  statusLabel.textContent = ''
+  if (status) {
+    status.title = label
+    status.dataset.tooltip = label
+    status.setAttribute('aria-label', label)
+  }
   statusDot.dataset.state = state
 }
 
-const scheduleDiskSave = (file: WorkspaceFile) => {
-  if (!file.handle) return
-  const previousTimer = diskSaveTimers.get(file.id)
-  if (previousTimer !== undefined) window.clearTimeout(previousTimer)
+const findLocalFileHandle = async (
+  directory: LocalDirectoryHandle,
+  name: string,
+) => {
+  let currentDirectory = directory
+  const parts = name.split('/').filter(Boolean)
 
-  const timer = window.setTimeout(async () => {
-    diskSaveTimers.delete(file.id)
-    try {
-      await writeLocalTextFile({ handle: file.handle as LocalFileHandle, markdown: file.markdown })
-      if (file.id === activeFileId) setStatus('Saved to folder', 'saved')
-    } catch (error) {
-      console.error(`Could not save ${file.name}.`, error)
-      if (file.id === activeFileId) setStatus('Folder save failed', 'ready')
+  for (const [index, part] of parts.entries()) {
+    let match: LocalEntryHandle | undefined
+    for await (const [entryName, entry] of currentDirectory.entries()) {
+      if (entryName === part) {
+        match = entry
+        break
+      }
     }
-  }, 450)
-  diskSaveTimers.set(file.id, timer)
+    if (!match) return undefined
+    if (index === parts.length - 1) {
+      return match.kind === 'file' ? match : undefined
+    }
+    if (match.kind !== 'directory') return undefined
+    currentDirectory = match
+  }
+
+  return undefined
 }
 
-const setDebugMarkdown = (markdown: string) => {
+const resolveLocalFileHandle = async (file: WorkspaceFile) => {
+  if (file.handle && typeof file.handle.createWritable === 'function') {
+    return file.handle
+  }
+  file.handle = undefined
+  if (file.source !== 'folder' || !selectedDirectory) return undefined
+  const handle = await findLocalFileHandle(selectedDirectory, file.name)
+  if (handle) file.handle = handle
+  return handle
+}
+
+const reconnectLocalServerWorkspace = async () => {
+  const serverPath = window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
+  if (!serverPath) return undefined
+  const snapshot = await openLocalServerWorkspace(serverPath)
+  selectedServerWorkspace = snapshot.workspace
+  return snapshot
+}
+
+const writeServerBackedFile = async (file: WorkspaceFile) => {
+  let workspace = selectedServerWorkspace
+  if (!workspace) {
+    workspace = (await reconnectLocalServerWorkspace())?.workspace
+  }
+  if (!workspace) throw new Error('Open the local folder again before storing this file.')
+
+  try {
+    await writeLocalServerFile(workspace.id, file.name, file.markdown)
+  } catch (firstError) {
+    // Vite restarts invalidate its in-memory session id. Reopen the remembered
+    // path once, then retry the idempotent file write with the fresh session.
+    const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
+    if (!reconnected) throw firstError
+    await writeLocalServerFile(
+      reconnected.workspace.id,
+      file.name,
+      file.markdown,
+    )
+  }
+}
+
+const renameServerBackedFile = async (
+  oldName: string,
+  newName: string,
+) => {
+  let workspace = selectedServerWorkspace
+  if (!workspace) workspace = (await reconnectLocalServerWorkspace())?.workspace
+  if (!workspace) throw new Error('Open the local folder again before renaming this file.')
+
+  try {
+    await renameLocalServerFile(workspace.id, oldName, newName)
+  } catch (firstError) {
+    const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
+    if (!reconnected) throw firstError
+    await renameLocalServerFile(reconnected.workspace.id, oldName, newName)
+  }
+}
+
+const setDebugMarkdown = (markdown: string, force = false) => {
   if (!isDebugMode || !debugMarkdownContent) return
-  debugMarkdownContent.textContent = markdown || '(empty document)'
+  if (!force && document.activeElement === debugMarkdownContent) return
+  if (debugMarkdownContent.value !== markdown) {
+    debugMarkdownContent.value = markdown
+  }
 }
 
 const getMarkdown = (editor: Awaited<ReturnType<typeof Editor.make>>) =>
@@ -564,19 +813,29 @@ const getMarkdown = (editor: Awaited<ReturnType<typeof Editor.make>>) =>
 
 type EditorInstance = Awaited<ReturnType<typeof Editor.make>>
 
+const showOutlineMessage = (message: string) => {
+  if (!outlineElement) return
+  outlineElement.replaceChildren()
+  const empty = document.createElement('p')
+  empty.className = 'outline-empty'
+  empty.textContent = message
+  outlineElement.append(empty)
+}
+
 const scheduleOutlineUpdate = (editor: EditorInstance) => {
   window.requestAnimationFrame(() => {
     if (!outlineElement) return
     outlineElement.replaceChildren()
+    if (activeFile()?.kind === 'csv') {
+      showOutlineMessage('No outline for CSV files')
+      return
+    }
     const headings = editorRoot.querySelectorAll<HTMLElement>(
       '.ProseMirror h1, .ProseMirror h2, .ProseMirror h3',
     )
 
     if (!headings.length) {
-      const empty = document.createElement('p')
-      empty.className = 'outline-empty'
-      empty.textContent = 'No headings yet'
-      outlineElement.append(empty)
+      showOutlineMessage('No headings yet')
       return
     }
 
@@ -596,15 +855,26 @@ const scheduleOutlineUpdate = (editor: EditorInstance) => {
   })
 }
 
-const loadMarkdown = (editor: EditorInstance, markdown: string) => {
+const loadMarkdown = (
+  editor: EditorInstance,
+  markdown: string,
+  options: { focus?: boolean; loading?: boolean } = {},
+) => {
   const parsed = editor.action((ctx) => ctx.get(parserCtx)(normalizeMarkdownBreaks(markdown)))
+  const loading = options.loading ?? true
+  if (loading) isLoadingMarkdown = true
   editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
     view.dispatch(
       view.state.tr.replaceWith(0, view.state.doc.content.size, parsed.content),
     )
-    view.focus()
+    if (options.focus ?? true) view.focus()
   })
+  if (loading) {
+    window.requestAnimationFrame(() => {
+      isLoadingMarkdown = false
+    })
+  }
 }
 
 const addMarkdownInclude = (editor: EditorInstance, file: WorkspaceFile) => {
@@ -686,7 +956,14 @@ const renderFileList = (editor: EditorInstance) => {
     const openButton = document.createElement('button')
     openButton.type = 'button'
     openButton.className = 'file-select'
-    openButton.textContent = file.name.split('/').at(-1) ?? file.name
+    const kindIcon = createIcon(
+      file.kind === 'csv' ? 'sheet' : file.kind === 'css' ? 'code' : 'file-text',
+    )
+    kindIcon.classList.add('file-kind-icon')
+    const fileLabel = document.createElement('span')
+    fileLabel.className = 'file-select-label'
+    fileLabel.textContent = file.name.split('/').at(-1) ?? file.name
+    openButton.append(kindIcon, fileLabel)
     openButton.title =
       file.kind === 'css' ? `Apply ${file.name}` : `Open ${file.name}`
     if (file.id === activeFileId) openButton.setAttribute('aria-current', 'page')
@@ -702,25 +979,22 @@ const renderFileList = (editor: EditorInstance) => {
       const tableButton = document.createElement('button')
       tableButton.type = 'button'
       tableButton.className = 'file-action file-action-apply'
-      tableButton.textContent = '▤'
+      setIcon(tableButton, 'table')
       tableButton.title = `Insert ${file.name} as a Markdown table`
+      tableButton.dataset.tooltip = tableButton.title
       tableButton.setAttribute('aria-label', `Insert ${file.name} as a Markdown table`)
       tableButton.addEventListener('click', () => addCsvTable(editor, file))
 
-      const diagramButton = document.createElement('button')
-      diagramButton.type = 'button'
-      diagramButton.className = 'file-action file-action-apply'
-      diagramButton.textContent = '⌁'
-      diagramButton.title = `Insert a Mermaid diagram from ${file.name}`
-      diagramButton.setAttribute('aria-label', `Insert a Mermaid diagram from ${file.name}`)
-      diagramButton.addEventListener('click', () => addCsvDiagram(editor, file))
-      actions.append(tableButton, diagramButton)
-    } else {
+      actions.append(tableButton)
+    }
+
+    if (file.kind === 'markdown' || file.kind === 'csv') {
       const injectButton = document.createElement('button')
       injectButton.type = 'button'
       injectButton.className = 'file-action'
-      injectButton.textContent = '↗'
+      setIcon(injectButton, 'include')
       injectButton.title = `Add a live include for ${file.name}`
+      injectButton.dataset.tooltip = injectButton.title
       injectButton.setAttribute('aria-label', `Add a live include for ${file.name}`)
       injectButton.addEventListener('click', () => {
         addMarkdownInclude(editor, file)
@@ -731,22 +1005,13 @@ const renderFileList = (editor: EditorInstance) => {
     const renameButton = document.createElement('button')
     renameButton.type = 'button'
     renameButton.className = 'file-action file-action-icon'
-    renameButton.textContent = '✎'
+    setIcon(renameButton, 'edit')
     renameButton.title = `Rename ${file.name}`
     renameButton.setAttribute('aria-label', `Rename ${file.name}`)
-    if (file.kind === 'css' || file.kind === 'csv') {
-      renameButton.disabled = true
-      renameButton.title = file.kind === 'css'
-        ? 'CSS files are applied from the workspace tree'
-        : 'Rename CSV files in the local folder, then reopen it'
-    } else if (file.source !== 'folder') {
-      renameButton.addEventListener('click', () => {
-        void renameFile(editor, file.id)
-      })
-    } else {
-      renameButton.disabled = true
-      renameButton.title = 'Rename in the local folder, then reopen it'
-    }
+    renameButton.dataset.tooltip = renameButton.title
+    renameButton.addEventListener('click', () => {
+      void runWorkspaceAction(() => renameFile(editor, file.id))
+    })
 
     actions.append(renameButton)
     item.append(openButton, actions)
@@ -766,7 +1031,7 @@ const renderFileList = (editor: EditorInstance) => {
 
     const caret = document.createElement('span')
     caret.className = 'folder-caret'
-    caret.textContent = '▸'
+    setIcon(caret, 'chevron-right')
     const label = document.createElement('span')
     label.className = 'folder-label'
     label.textContent = folder.name
@@ -804,12 +1069,20 @@ type CsvWorksheet = {
   getData: (highlighted?: boolean, processed?: boolean) => unknown[][]
 }
 
+const csvContextToolbar = new CsvContextToolbar()
+// Keep Chromium's native context menu out of the spreadsheet even if a
+// JSpreadsheet callback exits early or the click lands on table chrome.
+csvSpreadsheetElement?.addEventListener('contextmenu', (event) => {
+  event.preventDefault()
+})
 let activeCsvWorksheet: CsvWorksheet | undefined
+let activeCsvFileId: string | undefined
 let lastMarkdownFileId = workspaceFiles.find((file) => file.kind === 'markdown')?.id
 let workspaceEditor: EditorInstance | undefined
-let presentationReturnMode: PageMode = 'continuous'
 let presentationPageIndex = 0
 let isPresenting = false
+let presentedPageFormat: PageFormatSettings | undefined
+let exportPageLayoutOverride: PageLayoutSettings | undefined
 
 const pagePresetValues: PagePreset[] = [
   'a4-portrait',
@@ -864,13 +1137,19 @@ const activePageSettings = () => {
   return file ? pageSettingsFor(file.id) : defaultPageSettings()
 }
 
+const selectedPageFormat = (settings = activePageSettings()) =>
+  settings.mode === 'presentation' ? settings.presentation : settings.document
+
 const activePageLayoutSettings = (): PageLayoutSettings => {
+  if (exportPageLayoutOverride) return exportPageLayoutOverride
   const settings = activePageSettings()
-  const format = settings.mode === 'presentation'
+  const format = isPresenting && presentedPageFormat
+    ? presentedPageFormat
+    : settings.mode === 'presentation'
     ? settings.presentation
     : settings.document
   return {
-    mode: settings.mode,
+    mode: isPresenting ? 'presentation' : settings.mode,
     width: format.width,
     height: format.height,
     margin: format.margin,
@@ -888,16 +1167,12 @@ const renderPageFormatOptions = () => {
   if (!pageFormatSelect) return
   const settings = activePageSettings()
   if (layoutModeSelect) layoutModeSelect.value = settings.mode
-  const options = settings.mode === 'document'
-    ? [
-        ['a4-portrait', 'A4 portrait'],
-        ['a4-landscape', 'A4 landscape'],
-        ['custom', 'Custom'],
-      ]
-    : [
-        ['slide-16-9', '16:9 landscape'],
-        ['custom', 'Custom'],
-      ]
+  const options = [
+    ['a4-portrait', 'A4 portrait'],
+    ['a4-landscape', 'A4 landscape'],
+    ['slide-16-9', '16:9 landscape'],
+    ['custom', 'Custom'],
+  ]
   pageFormatSelect.replaceChildren()
   options.forEach(([value, label]) => {
     const option = document.createElement('option')
@@ -971,25 +1246,23 @@ const presentationPageStarts = () => {
   if (!wrap || !editorRoot) return [0]
   const pageSurface = editorRoot.querySelector<HTMLElement>('.ProseMirror')
   if (!pageSurface) return [0]
-  const wrapBounds = wrap.getBoundingClientRect()
   const scale = Number.parseFloat(
     pageSurface.style.getPropertyValue('--page-scale') || '1',
   )
-  const pageMargin = Number.parseFloat(
-    pageSurface.style.getPropertyValue('--page-margin') || '0',
+  const pageHeight = Number.parseFloat(
+    pageSurface.style.getPropertyValue('--page-height') || '0',
   )
-  const renderedMargin = pageMargin * scale
-  const starts = [0]
-  editorRoot.querySelectorAll<HTMLElement>(
-    '.page-layout-break-before[data-page-break]',
-  ).forEach((marker) => {
-    const bounds = marker.getBoundingClientRect()
-    starts.push(Math.max(
-      0,
-      wrap.scrollTop + bounds.top - wrapBounds.top - renderedMargin,
-    ))
-  })
-  return [...new Set(starts)]
+  const pageGap = Number.parseFloat(
+    pageSurface.style.getPropertyValue('--page-gap') || '0',
+  )
+  const pageCount = editorRoot.querySelectorAll(
+    '.page-layout-gap[data-page-break]',
+  ).length + 1
+  const renderedPageSpan = (pageHeight + pageGap) * scale
+  return Array.from(
+    { length: pageCount },
+    (_, pageIndex) => Math.max(0, pageIndex * renderedPageSpan),
+  )
 }
 
 const scrollToPresentationPage = (direction: -1 | 1) => {
@@ -1005,13 +1278,16 @@ const scrollToPresentationPage = (direction: -1 | 1) => {
 
 const enterPresentation = async (editor: EditorInstance) => {
   const settings = activePageSettings()
-  presentationReturnMode = settings.mode
-  settings.mode = 'presentation'
-  persistPageSettings()
+  presentedPageFormat = { ...selectedPageFormat(settings) }
   isPresenting = true
   presentationPageIndex = 0
   document.body.classList.add('is-presenting')
-  if (presentButton) presentButton.textContent = 'Exit presentation'
+  if (presentButton) {
+    setIcon(presentButton, 'exit-fullscreen')
+    presentButton.title = 'Exit presentation'
+    presentButton.dataset.tooltip = 'Exit presentation'
+    presentButton.setAttribute('aria-label', 'Exit presentation')
+  }
   renderPageFormatOptions()
   editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
@@ -1040,10 +1316,13 @@ const exitPresentation = async (editor: EditorInstance) => {
       // Browser fullscreen may already have been closed by the user.
     }
   }
-  const settings = activePageSettings()
-  settings.mode = presentationReturnMode
-  persistPageSettings()
-  if (presentButton) presentButton.textContent = 'Present'
+  presentedPageFormat = undefined
+  if (presentButton) {
+    setIcon(presentButton, 'fullscreen')
+    presentButton.title = 'Present document'
+    presentButton.dataset.tooltip = 'Present document'
+    presentButton.setAttribute('aria-label', 'Present document')
+  }
   renderPageFormatOptions()
   editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
@@ -1054,11 +1333,14 @@ const exitPresentation = async (editor: EditorInstance) => {
 }
 
 const setCsvStatus = (message: string) => {
-  if (csvEditorStatus) csvEditorStatus.textContent = message
+  if (!csvEditorStatus) return
+  csvEditorStatus.title = message
+  csvEditorStatus.dataset.tooltip = message
+  csvEditorStatus.setAttribute('aria-label', message)
 }
 
 const persistActiveCsv = () => {
-  const file = activeFile()
+  const file = workspaceFiles.find((candidate) => candidate.id === activeCsvFileId)
   if (file?.kind === 'csv' && activeCsvWorksheet) {
     syncCsvFile(file, activeCsvWorksheet)
   }
@@ -1075,32 +1357,108 @@ const storeActiveFile = async () => {
   }
   persistWorkspace()
 
-  if (file.handle) {
-    try {
-      await writeLocalTextFile({ handle: file.handle, markdown: file.markdown })
-      setStatus(`Stored ${file.name} in the folder`, 'saved')
-    } catch (error) {
-      console.error(`Could not store ${file.name}.`, error)
-      setStatus(`Could not store ${file.name}`, 'ready')
-      return false
+  try {
+    if (file.source === 'server') {
+      await writeServerBackedFile(file)
+      dirtyDiskFiles.delete(file.id)
+      setStatus(`Stored ${file.name} on disk`, 'saved')
+      setCsvStatus(`Stored ${file.name} on disk`)
+      return true
     }
-  } else {
-    setStatus(`Stored ${file.name} locally`, 'saved')
+
+    if (!selectedDirectory && file.source === 'folder') {
+      selectedDirectory = await restoreLocalDirectory()
+    }
+    if (
+      selectedDirectory &&
+      !await ensureLocalPermission(selectedDirectory, 'readwrite', true)
+    ) {
+      throw new Error('Read and write permission is required for this folder.')
+    }
+
+    let handle = await resolveLocalFileHandle(file)
+    if (
+      !handle &&
+      file.source === 'folder' &&
+      selectedDirectory?.getFileHandle &&
+      !file.name.includes('/')
+    ) {
+      handle = await selectedDirectory.getFileHandle(file.name, { create: true })
+      file.handle = handle
+    }
+    if (!handle) {
+      if (file.source === 'folder') {
+        throw new Error(`Could not find ${file.name} in the open folder.`)
+      }
+      setStatus(`Stored ${file.name} in browser storage`, 'saved')
+      return true
+    }
+
+    await writeLocalTextFile(
+      { handle, markdown: file.markdown },
+      { requestPermission: true },
+    )
+    dirtyDiskFiles.delete(file.id)
+    setStatus(`Stored ${file.name} on disk`, 'saved')
+    setCsvStatus(`Stored ${file.name} on disk`)
+    return true
+  } catch (error) {
+    console.error(`Could not store ${file.name}.`, error)
+    const message = error instanceof Error ? error.message : `Could not store ${file.name}.`
+    setStatus(message, 'ready')
+    setCsvStatus(message)
+    return false
   }
-  return true
 }
 
-const reloadProject = () => {
-  window.localStorage.removeItem(FILES_STORAGE_KEY)
-  window.localStorage.removeItem(STORAGE_KEY)
-  window.localStorage.removeItem(ACTIVE_FILE_KEY)
+const reloadProject = async (editor: EditorInstance) => {
+  const preferredFileName = activeFile()?.name
+  try {
+    if (selectedServerWorkspace) {
+      setStatus('Reloading folder from disk…', 'saving')
+      if (folderStatus) {
+        folderStatus.textContent = `${selectedServerWorkspace.name} · reading disk…`
+      }
+      let snapshot: LocalServerSnapshot
+      try {
+        snapshot = await reloadLocalServerWorkspace(selectedServerWorkspace.id)
+      } catch (firstError) {
+        const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
+        if (!reconnected) throw firstError
+        snapshot = reconnected
+      }
+      await loadWorkspaceFromServer(snapshot, { editor, preferredFileName })
+      setStatus(`Reloaded ${snapshot.workspace.name} from disk`, 'saved')
+      setCsvStatus(`Reloaded ${snapshot.workspace.name} from disk`)
+      return true
+    }
 
-  const url = new URL(window.location.href)
-  url.searchParams.set('reload', String(Date.now()))
-  window.location.assign(url.href)
+    const directory = selectedDirectory ?? await restoreLocalDirectory()
+    if (!directory) {
+      throw new Error('Open a folder before reloading from disk.')
+    }
+    setStatus('Reloading folder from disk…', 'saving')
+    if (folderStatus) folderStatus.textContent = `${directory.name} · reading disk…`
+    await loadWorkspaceFromDirectory(directory, {
+      editor,
+      preferredFileName,
+      requestPermission: true,
+    })
+    setStatus(`Reloaded ${directory.name} from disk`, 'saved')
+    setCsvStatus(`Reloaded ${directory.name} from disk`)
+    return true
+  } catch (error) {
+    console.error('Could not reload the folder from disk.', error)
+    const message = error instanceof Error ? error.message : 'Could not reload from disk.'
+    setStatus(message, 'ready')
+    setCsvStatus(message)
+    if (folderStatus) folderStatus.textContent = message
+    return false
+  }
 }
 
 const destroyCsvEditor = () => {
+  csvContextToolbar.close()
   try {
     jspreadsheet.destroy(
       csvSpreadsheetElement as Parameters<typeof jspreadsheet.destroy>[0],
@@ -1110,6 +1468,7 @@ const destroyCsvEditor = () => {
     // The container may not have finished initializing yet.
   }
   activeCsvWorksheet = undefined
+  activeCsvFileId = undefined
   csvSpreadsheetElement?.replaceChildren()
 }
 
@@ -1125,6 +1484,7 @@ const showCsvEditor = () => {
   if (editorCard) editorCard.hidden = true
   if (csvEditorCard) csvEditorCard.hidden = false
   if (debugMarkdownView) debugMarkdownView.hidden = true
+  showOutlineMessage('No outline for CSV files')
 }
 
 const markdownTargetForCsvAction = (editor: EditorInstance) => {
@@ -1189,30 +1549,76 @@ const addCsvTable = (editor: EditorInstance, file: WorkspaceFile) => {
   )
 }
 
-const addCsvDiagram = (editor: EditorInstance, file: WorkspaceFile) => {
-  if (file.kind !== 'csv') return
-  insertMermaidBlock(
-    editor,
-    'mermaid',
-    csvToMermaidFlowchart(file.markdown),
-    `Inserted a diagram from ${file.name}`,
+const defaultMermaidTemplate = (file: WorkspaceFile) => {
+  const rows = normalizeCsvRows(parseCsv(file.markdown))
+  const dataRows = Math.max(1, Math.min(3, rows.length - 1))
+  const references = Array.from(
+    { length: dataRows },
+    (_, index) => `  A${index + 2} --> B${index + 2}`,
   )
+  return ['flowchart LR', ...references].join('\n')
 }
 
-const addLinkedCsvDiagram = async (
+const plainMermaidChoice = 'plain-mermaid'
+
+const addMermaidDiagram = async (
   editor: EditorInstance,
-  file: WorkspaceFile,
+  preferredFile?: WorkspaceFile,
 ) => {
-  if (file.kind !== 'csv') return
+  const csvFiles = workspaceFiles
+    .filter((file) => file.kind === 'csv')
+    .sort((left, right) => {
+      if (left.id === preferredFile?.id) return -1
+      if (right.id === preferredFile?.id) return 1
+      return left.name.localeCompare(right.name)
+    })
+  const selectedId = await requestChoice({
+    title: 'Insert Mermaid diagram',
+    label: 'Start with ordinary Mermaid or link the diagram to a CSV file.',
+    choices: [
+      {
+        value: plainMermaidChoice,
+        label: 'Blank Mermaid',
+        detail: 'A normal diagram with no external data source',
+      },
+      ...csvFiles.map((file) => ({
+        value: file.id,
+        label: file.name.split('/').at(-1) ?? file.name,
+        detail: `CSV source · ${file.name}`,
+      })),
+    ],
+  })
+  if (!selectedId) return false
+
+  if (selectedId === plainMermaidChoice) {
+    const source = await requestText({
+      title: 'Insert Mermaid diagram',
+      label: 'Mermaid source',
+      value: 'flowchart LR\n  A[Start] --> B[Finish]',
+      submitLabel: 'Insert diagram',
+      multiline: true,
+    })
+    if (!source?.trim()) return false
+    return insertMermaidBlock(
+      editor,
+      'mermaid',
+      source,
+      'Inserted Mermaid diagram',
+    )
+  }
+
+  const file = csvFiles.find((candidate) => candidate.id === selectedId)
+  if (!file) return false
+
   const template = await requestText({
     title: `Link Mermaid to ${file.name}`,
     label: 'Mermaid template (use cells such as A2 or ranges such as A2:A7)',
-    value: 'flowchart LR\n  A2 --> B2\n  A3 --> B3',
+    value: defaultMermaidTemplate(file),
     submitLabel: 'Insert diagram',
     multiline: true,
   })
-  if (!template?.trim()) return
-  insertMermaidBlock(
+  if (!template?.trim()) return false
+  return insertMermaidBlock(
     editor,
     `mermaid(${file.name})`,
     template,
@@ -1220,16 +1626,235 @@ const addLinkedCsvDiagram = async (
   )
 }
 
+const csvRowsFromWorksheet = (
+  worksheet: CsvWorksheet,
+  processed: boolean,
+) => normalizeCsvRows(
+  worksheet
+    .getData(false, processed)
+    .map((row) => row.map((cell) => {
+      const value = String(cell ?? '')
+      if (!processed) return value
+      const template = document.createElement('template')
+      template.innerHTML = value
+      return template.content.textContent ?? ''
+    })),
+)
+
+const evaluatedCsvFromWorksheet = (worksheet: CsvWorksheet) =>
+  serializeCsv(csvRowsFromWorksheet(worksheet, true))
+
 const syncCsvFile = (file: WorkspaceFile, worksheet: CsvWorksheet) => {
   if (file.kind !== 'csv') return
-  const rows = worksheet
-    .getData(false, true)
-    .map((row) => row.map((cell) => String(cell ?? '')))
-  file.markdown = serializeCsv(normalizeCsvRows(rows))
+  // Keep formulas in the editable source. The processed values live in a
+  // separate cache used by previews, includes, and portable exports.
+  file.markdown = serializeCsv(csvRowsFromWorksheet(worksheet, false))
+  evaluatedCsvSources.set(file.id, evaluatedCsvFromWorksheet(worksheet))
+  if (isDiskBackedFile(file)) dirtyDiskFiles.add(file.id)
   persistWorkspace()
-  scheduleDiskSave(file)
+  notifyMarkdownIncludesChanged()
   notifyMermaidCsvDataChanged()
-  setCsvStatus('Changed · saved locally')
+  setCsvStatus(
+    isDiskBackedFile(file)
+      ? 'Edited locally · use Store to write to disk'
+      : 'Saved in browser storage',
+  )
+}
+
+const evaluateCsvFile = async (file: WorkspaceFile) => {
+  if (file.kind !== 'csv') return file.markdown
+  if (file.id === activeCsvFileId && activeCsvWorksheet) {
+    return evaluatedCsvFromWorksheet(activeCsvWorksheet)
+  }
+
+  const sandbox = document.createElement('div')
+  sandbox.className = 'csv-evaluation-sandbox'
+  sandbox.setAttribute('aria-hidden', 'true')
+  document.body.append(sandbox)
+  try {
+    const rows = normalizeCsvRows(parseCsv(file.markdown))
+    const worksheets = jspreadsheet(sandbox, {
+      worksheets: [{
+        data: rows,
+        minDimensions: [rows[0]?.length ?? 1, rows.length],
+        csvDelimiter: ',',
+      }],
+    })
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
+    })
+    const worksheet = worksheets[0] as unknown as CsvWorksheet | undefined
+    return worksheet ? evaluatedCsvFromWorksheet(worksheet) : file.markdown
+  } catch (error) {
+    console.warn(`Could not evaluate formulas in ${file.name}.`, error)
+    return file.markdown
+  } finally {
+    try {
+      jspreadsheet.destroy(
+        sandbox as Parameters<typeof jspreadsheet.destroy>[0],
+        false,
+      )
+    } catch {
+      // Initialization may have failed before JSpreadsheet attached itself.
+    }
+    sandbox.remove()
+  }
+}
+
+const refreshEvaluatedCsvSources = async () => {
+  for (const file of workspaceFiles) {
+    if (file.kind === 'csv') {
+      evaluatedCsvSources.set(file.id, await evaluateCsvFile(file))
+    }
+  }
+  notifyMarkdownIncludesChanged()
+  notifyMermaidCsvDataChanged()
+}
+
+const downloadTextFile = (name: string, text: string, type: string) => {
+  const url = URL.createObjectURL(new Blob([text], { type }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  anchor.hidden = true
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+const nextAnimationFrame = () => new Promise<void>((resolve) => {
+  window.requestAnimationFrame(() => resolve())
+})
+
+const waitForExportRendering = async () => {
+  // Page decorations may require a second layout pass after their insertion.
+  for (let frame = 0; frame < 4; frame += 1) await nextAnimationFrame()
+
+  const deadline = performance.now() + 3_000
+  while (
+    editorRoot?.querySelector('.mermaid-preview:not(.has-error):not(:has(svg))') &&
+    performance.now() < deadline
+  ) {
+    await nextAnimationFrame()
+  }
+}
+
+const createPagedDocumentHtml = async (
+  editor: EditorInstance,
+  file: WorkspaceFile,
+) => {
+  const format = { ...selectedPageFormat() }
+  exportPageLayoutOverride = {
+    mode: 'document',
+    width: format.width,
+    height: format.height,
+    margin: format.margin,
+  }
+  editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
+
+  try {
+    await waitForExportRendering()
+    const pageSurface = editorRoot?.querySelector<HTMLElement>('.ProseMirror')
+    const gap = Number.parseFloat(
+      pageSurface?.style.getPropertyValue('--page-gap') || '28',
+    )
+    const layout: DocumentExportLayout = {
+      width: format.width,
+      height: format.height,
+      margin: format.margin,
+      gap: Number.isFinite(gap) ? gap : 28,
+      pageCount: editorRoot.querySelectorAll(
+        '.page-layout-gap[data-page-break]',
+      ).length + 1,
+    }
+    return createDocumentExportHtml({
+      editorRoot,
+      title: file.name,
+      layout,
+    })
+  } finally {
+    exportPageLayoutOverride = undefined
+    editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
+  }
+}
+
+const portableMarkdownFor = (file: WorkspaceFile) => createPortableMarkdown(
+  file.markdown,
+  {
+    resolveInclude: (fileName) => {
+      const included = findWorkspaceFile(fileName, markdownAndCsvKinds)
+      if (!included) return undefined
+      return included.kind === 'csv'
+        ? csvToMarkdownTable(csvSourceForFile(included))
+        : included.markdown
+    },
+    resolveCsv: resolveWorkspaceCsv,
+  },
+)
+
+const exportActiveFile = async (editor: EditorInstance) => {
+  persistActiveCsv()
+  const file = activeFile()
+  if (!file || file.kind === 'css') return false
+
+  if (file.kind === 'markdown') {
+    file.markdown = getMarkdown(editor)
+  }
+  await refreshEvaluatedCsvSources()
+
+  if (file.kind === 'csv') {
+    const csv = evaluatedCsvSources.get(file.id) ?? file.markdown
+    downloadTextFile(
+      file.name.split('/').at(-1) ?? file.name,
+      `\ufeff${csv}`,
+      'text/csv;charset=utf-8',
+    )
+    setCsvStatus(`Exported evaluated ${file.name}`)
+    return true
+  }
+
+  const format = await requestChoice({
+    title: 'Export document',
+    label: 'Choose an export format.',
+    choices: [
+      {
+        value: 'html',
+        label: 'HTML',
+        detail: 'Standalone document with the current style and page breaks',
+      },
+      {
+        value: 'pdf',
+        label: 'PDF',
+        detail: 'Open print dialog; choose Save as PDF',
+      },
+      {
+        value: 'markdown',
+        label: 'Portable Markdown',
+        detail: 'Inline includes and evaluated CSV-backed Mermaid values',
+      },
+    ],
+  })
+  if (!format) return false
+
+  const fileName = file.name.split('/').at(-1) ?? file.name
+  const baseName = fileName.replace(/\.(?:md|markdown)$/i, '') || 'document'
+  if (format === 'markdown') {
+    downloadTextFile(fileName, portableMarkdownFor(file), 'text/markdown;charset=utf-8')
+    setStatus(`Exported portable ${file.name}`, 'saved')
+    return true
+  }
+
+  const html = await createPagedDocumentHtml(editor, file)
+  if (format === 'html') {
+    downloadTextFile(`${baseName}.html`, html, 'text/html;charset=utf-8')
+    setStatus(`Exported ${baseName}.html`, 'saved')
+    return true
+  }
+
+  await printDocumentHtml(html)
+  setStatus(`Opened ${file.name} for PDF export`, 'saved')
+  return true
 }
 
 const openCsvFile = (file: WorkspaceFile) => {
@@ -1238,15 +1863,23 @@ const openCsvFile = (file: WorkspaceFile) => {
   activeFileId = file.id
   persistWorkspace()
   if (workspaceEditor) renderFileList(workspaceEditor)
-  if (documentName) documentName.textContent = file.name
-  if (csvEditorName) csvEditorName.textContent = file.name
+  updateDocumentNameControls(file)
   showCsvEditor()
   destroyCsvEditor()
 
   const rows = normalizeCsvRows(parseCsv(file.markdown))
   const worksheets = jspreadsheet(csvSpreadsheetElement, {
+    parseFormulas: true,
     onchange: (worksheet: unknown) => {
       syncCsvFile(file, worksheet as unknown as CsvWorksheet)
+    },
+    contextMenu: (_instance, _column, _row, event, items) => {
+      event.preventDefault()
+      event.stopPropagation()
+      csvContextToolbar.open(event, items)
+      // Jspreadsheet supports `false` as "do not open the native menu", but
+      // its public type omits that documented runtime branch.
+      return false as never
     },
     worksheets: [
       {
@@ -1259,6 +1892,12 @@ const openCsvFile = (file: WorkspaceFile) => {
     ],
   })
   activeCsvWorksheet = worksheets[0] as unknown as CsvWorksheet | undefined
+  activeCsvFileId = file.id
+  if (activeCsvWorksheet) {
+    evaluatedCsvSources.set(file.id, evaluatedCsvFromWorksheet(activeCsvWorksheet))
+    notifyMarkdownIncludesChanged()
+    notifyMermaidCsvDataChanged()
+  }
   setCsvStatus(`${file.name} · ready to edit`)
 }
 
@@ -1280,33 +1919,108 @@ const openFile = (editor: EditorInstance, fileId: string) => {
   lastMarkdownFileId = file.id
   persistWorkspace()
   showMarkdownEditor()
-  if (documentName) documentName.textContent = file.name
+  updateDocumentNameControls(file)
   renderFileList(editor)
   renderPageFormatOptions()
   loadMarkdown(editor, file.markdown)
   setStatus('Opened locally', 'ready')
 }
 
+const migrateRenamedFileIdentity = (
+  file: WorkspaceFile,
+  newName: string,
+  newHandle?: LocalFileHandle,
+) => {
+  const oldId = file.id
+  const oldName = file.name
+  const newId = isDiskBackedFile(file) && oldId.endsWith(oldName)
+    ? `${oldId.slice(0, -oldName.length)}${newName}`
+    : oldId
+
+  file.name = newName
+  file.id = newId
+  if (newHandle) file.handle = newHandle
+
+  if (activeFileId === oldId) activeFileId = newId
+  if (lastMarkdownFileId === oldId) lastMarkdownFileId = newId
+  if (activeCsvFileId === oldId) activeCsvFileId = newId
+  if (dirtyDiskFiles.delete(oldId)) dirtyDiskFiles.add(newId)
+  if (evaluatedCsvSources.has(oldId)) {
+    const evaluated = evaluatedCsvSources.get(oldId) as string
+    evaluatedCsvSources.delete(oldId)
+    evaluatedCsvSources.set(newId, evaluated)
+  }
+  if (pageSettingsByFile[oldId]) {
+    pageSettingsByFile[newId] = pageSettingsByFile[oldId]
+    if (newId !== oldId) delete pageSettingsByFile[oldId]
+    persistPageSettings()
+  }
+  if (customThemeStyle?.dataset.workspaceTheme === oldId) {
+    customThemeStyle.dataset.workspaceTheme = newId
+  }
+}
+
 const renameFile = async (editor: EditorInstance, fileId: string) => {
   const file = workspaceFiles.find((candidate) => candidate.id === fileId)
-  if (!file) return
+  if (!file) return false
 
   const requestedName = await requestText({
-    title: 'Rename Markdown file',
-    label: 'File name',
+    title: `Rename ${file.kind === 'csv' ? 'spreadsheet' : 'file'}`,
+    label: 'Path inside the workspace',
     value: file.name,
     submitLabel: 'Rename',
     multiline: false,
   })
-  const normalizedName = requestedName ? normalizeFileName(requestedName) : ''
-  if (!normalizedName) return
+  if (requestedName === null) return false
 
-  file.name = uniqueFileName(normalizedName, file.id)
-  persistWorkspace()
-  if (file.id === activeFileId && documentName) {
-    documentName.textContent = file.name
+  let newName: string
+  try {
+    newName = normalizedRenameName(requestedName, file)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The file name is invalid.'
+    setStatus(message, 'ready')
+    setCsvStatus(message)
+    return false
   }
-  renderFileList(editor)
+  if (newName === file.name) return true
+
+  persistActiveCsv()
+  if (file.kind === 'markdown' && file.id === activeFileId) {
+    file.markdown = getMarkdown(editor)
+  }
+
+  const oldName = file.name
+  try {
+    let newHandle: LocalFileHandle | undefined
+    if (file.source === 'server') {
+      await renameServerBackedFile(oldName, newName)
+    } else if (file.source === 'folder') {
+      selectedDirectory ??= await restoreLocalDirectory()
+      if (!selectedDirectory) {
+        throw new Error('Open the local folder again before renaming this file.')
+      }
+      if (!await ensureLocalPermission(selectedDirectory, 'readwrite', true)) {
+        throw new Error('Read and write permission is required for this folder.')
+      }
+      newHandle = await renameLocalTextFile(selectedDirectory, oldName, newName)
+    }
+
+    migrateRenamedFileIdentity(file, newName, newHandle)
+    persistWorkspace()
+    updateDocumentNameControls(file)
+    renderFileList(editor)
+    notifyMarkdownIncludesChanged()
+    notifyMermaidCsvDataChanged()
+    setStatus(`Renamed ${oldName} to ${newName}`, 'saved')
+    setCsvStatus(`Renamed to ${newName}`)
+    return true
+  } catch (error) {
+    console.error(`Could not rename ${oldName}.`, error)
+    const message = error instanceof Error ? error.message : `Could not rename ${oldName}.`
+    setStatus(message, 'ready')
+    setCsvStatus(message)
+    return false
+  }
 }
 
 const createNewFile = async (editor: EditorInstance) => {
@@ -1326,10 +2040,22 @@ const createNewFile = async (editor: EditorInstance) => {
     name,
     markdown: `# ${normalizedName.replace(/\.md$/i, '')}\n\n`,
     kind: 'markdown',
-    source: selectedDirectory ? 'folder' : 'browser',
+    source: selectedServerWorkspace
+      ? 'server'
+      : selectedDirectory
+        ? 'folder'
+        : 'browser',
   }
 
-  if (selectedDirectory) {
+  if (selectedServerWorkspace) {
+    try {
+      await writeServerBackedFile(file)
+    } catch (error) {
+      console.error('Could not create local file.', error)
+      setStatus('Could not create folder file', 'ready')
+      return
+    }
+  } else if (selectedDirectory) {
     if (name.includes('/')) {
       setStatus('Create the file at the folder root', 'ready')
       return
@@ -1340,7 +2066,10 @@ const createNewFile = async (editor: EditorInstance) => {
     }
     try {
       file.handle = await selectedDirectory.getFileHandle(name, { create: true })
-      await writeLocalTextFile(file as { handle: LocalFileHandle; markdown: string })
+      await writeLocalTextFile(
+        file as { handle: LocalFileHandle; markdown: string },
+        { requestPermission: true },
+      )
     } catch (error) {
       console.error('Could not create local file.', error)
       setStatus('Could not create folder file', 'ready')
@@ -1355,6 +2084,86 @@ const createNewFile = async (editor: EditorInstance) => {
 
 let customThemeStyle: HTMLStyleElement | undefined
 
+const splitCssSelectors = (value: string) => {
+  const selectors: string[] = []
+  let start = 0
+  let depth = 0
+  let quote = ''
+  let escaped = false
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = ''
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+    } else if (character === '(' || character === '[') {
+      depth += 1
+    } else if (character === ')' || character === ']') {
+      depth = Math.max(0, depth - 1)
+    } else if (character === ',' && depth === 0) {
+      selectors.push(value.slice(start, index))
+      start = index + 1
+    }
+  }
+
+  selectors.push(value.slice(start))
+  return selectors
+}
+
+const scopeCssSelector = (selector: string) => {
+  const trimmed = selector.trim()
+  if (!trimmed) return trimmed
+  const scope = '.editor-wrap'
+  const scopedGlobals = trimmed.replace(
+    /(^|[\s>+~])(html|body|:root)(?=$|[\s>+~.#:[\]])/g,
+    '$1.editor-wrap',
+  ).replace(
+    /^\.editor-card(?=$|[\s>+~.#:[\]])/,
+    '.editor-wrap',
+  )
+  return scopedGlobals === scope || scopedGlobals.startsWith(`${scope} `)
+    ? scopedGlobals
+    : `${scope} ${scopedGlobals}`
+}
+
+const scopeDocumentCss = (style: HTMLStyleElement) => {
+  const rules = style.sheet?.cssRules
+  if (!rules) return
+
+  const visit = (list: CSSRuleList) => {
+    for (const rule of Array.from(list)) {
+      if (rule.type === 1) {
+        const styleRule = rule as CSSStyleRule
+        styleRule.selectorText = splitCssSelectors(styleRule.selectorText)
+          .map(scopeCssSelector)
+          .join(', ')
+        continue
+      }
+
+      // Keyframe selectors such as `from` and `to` must remain untouched.
+      if (rule.type === 7 || !('cssRules' in rule)) continue
+      try {
+        visit((rule as CSSGroupingRule).cssRules)
+      } catch {
+        // Some browser-managed rules (for example cross-origin imports) are not readable.
+      }
+    }
+  }
+
+  visit(rules)
+}
+
 const applyCssFile = (file: WorkspaceFile) => {
   if (file.kind !== 'css') return
   customThemeStyle?.remove()
@@ -1362,146 +2171,217 @@ const applyCssFile = (file: WorkspaceFile) => {
   customThemeStyle.dataset.workspaceTheme = file.id
   customThemeStyle.textContent = file.markdown
   document.head.append(customThemeStyle)
+  scopeDocumentCss(customThemeStyle)
+  editorRoot?.closest<HTMLElement>('.editor-wrap')?.classList.add('has-document-theme')
+  notifyMermaidThemeChanged()
+  workspaceEditor?.action((ctx) => {
+    requestPageLayoutRefresh(ctx.get(editorViewCtx))
+  })
   setStatus(`Applied ${file.name}`, 'saved')
 }
 
-const refreshFolderFiles = async (editor: EditorInstance) => {
-  if (!selectedDirectory) return
-  let changed = false
-  let changedCsv = false
+const activateWorkspaceFile = (editor: EditorInstance) => {
+  const file = activeFile()
+  renderFileList(editor)
+  renderPageFormatOptions()
+  if (!file) {
+    showMarkdownEditor()
+    updateDocumentNameControls(undefined)
+    loadMarkdown(editor, '')
+    return
+  }
+  openFile(editor, file.id)
+}
 
-  for (const file of workspaceFiles) {
-    if (!file.handle || file.id === activeFileId) continue
+const loadWorkspaceFromDirectory = async (
+  directory: LocalDirectoryHandle,
+  options: {
+    editor?: EditorInstance
+    preferredFileName?: string
+    requestPermission: boolean
+  },
+) => {
+  if (!await ensureLocalPermission(
+    directory,
+    'readwrite',
+    options.requestPermission,
+  )) {
+    throw new Error('Read and write permission is required for this folder.')
+  }
+
+  const localFiles = await readLocalTextFiles(directory)
+  dirtyDiskFiles.clear()
+  if (options.editor && activeCsvWorksheet) destroyCsvEditor()
+  selectedServerWorkspace = undefined
+  selectedDirectory = directory
+  window.localStorage.removeItem(LOCAL_SERVER_PATH_KEY)
+  replaceWorkspaceFiles(
+    workspaceFilesFromDirectory(directory, localFiles),
+    options.preferredFileName,
+  )
+  try {
+    await rememberLocalDirectory(directory)
+  } catch (error) {
+    // IndexedDB persistence is a convenience. The live handle remains usable.
+    console.warn('Could not remember the selected folder.', error)
+  }
+
+  if (folderStatus) {
+    folderStatus.textContent = localFiles.length
+      ? `${directory.name} · ${localFiles.length} files · disk-backed`
+      : `${directory.name} · empty folder · disk-backed`
+  }
+
+  if (options.editor) activateWorkspaceFile(options.editor)
+  const activeTheme = customThemeStyle?.dataset.workspaceTheme
+  if (activeTheme) {
+    const themeFile = workspaceFiles.find((file) => file.id === activeTheme)
+    if (themeFile?.kind === 'css') applyCssFile(themeFile)
+  }
+  await refreshEvaluatedCsvSources()
+  notifyMarkdownIncludesChanged()
+  notifyMermaidCsvDataChanged()
+  return localFiles.length
+}
+
+const loadWorkspaceFromServer = async (
+  snapshot: LocalServerSnapshot,
+  options: {
+    editor?: EditorInstance
+    preferredFileName?: string
+  } = {},
+) => {
+  dirtyDiskFiles.clear()
+  if (options.editor && activeCsvWorksheet) destroyCsvEditor()
+  selectedDirectory = undefined
+  selectedServerWorkspace = snapshot.workspace
+  window.localStorage.setItem(LOCAL_SERVER_PATH_KEY, snapshot.workspace.path)
+  replaceWorkspaceFiles(
+    workspaceFilesFromServer(snapshot),
+    options.preferredFileName,
+  )
+
+  if (folderStatus) {
+    folderStatus.textContent = snapshot.files.length
+      ? `${snapshot.workspace.name} · ${snapshot.files.length} files · disk-backed`
+      : `${snapshot.workspace.name} · empty folder · disk-backed`
+    folderStatus.title = snapshot.workspace.path
+  }
+
+  if (options.editor) activateWorkspaceFile(options.editor)
+  const activeTheme = customThemeStyle?.dataset.workspaceTheme
+  if (activeTheme) {
+    const themeFile = workspaceFiles.find((file) => file.id === activeTheme)
+    if (themeFile?.kind === 'css') applyCssFile(themeFile)
+  }
+  await refreshEvaluatedCsvSources()
+  notifyMarkdownIncludesChanged()
+  notifyMermaidCsvDataChanged()
+  return snapshot.files.length
+}
+
+const restoreFolderWorkspace = async () => {
+  const serverPath = window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
+  if (serverPath && await getLocalServerCapabilities()) {
     try {
-      const latest = await file.handle.getFile()
-      const markdown = await latest.text()
-      if (markdown !== file.markdown) {
-        file.markdown = markdown
-        if (customThemeStyle?.dataset.workspaceTheme === file.id) {
-          applyCssFile(file)
-        }
-        if (file.kind === 'csv') changedCsv = true
-        changed = true
-      }
+      const snapshot = await openLocalServerWorkspace(serverPath)
+      await loadWorkspaceFromServer(snapshot, {
+        preferredFileName: activeFile()?.name,
+      })
+      return true
     } catch (error) {
-      console.warn(`Could not refresh ${file.name}.`, error)
+      console.warn('Could not restore the local server folder.', error)
+      if (folderStatus) {
+        folderStatus.textContent = 'Cached files only · open the folder to reconnect'
+      }
     }
   }
 
-  if (!changed) return
-  persistWorkspace()
-  notifyMarkdownIncludesChanged()
-  if (changedCsv) notifyMermaidCsvDataChanged()
-  scheduleOutlineUpdate(editor)
+  try {
+    const directory = await restoreLocalDirectory()
+    if (!directory) {
+      if (
+        folderStatus &&
+        workspaceFiles.some((file) => isDiskBackedFile(file))
+      ) {
+        folderStatus.textContent = 'Cached files only · open the folder to reconnect'
+      }
+      return false
+    }
+    selectedDirectory = directory
+    const permission = await queryLocalPermission(directory, 'readwrite')
+    if (permission !== 'granted') {
+      if (folderStatus) {
+        folderStatus.textContent = `${directory.name} · use Reload to reconnect`
+      }
+      return false
+    }
+    await loadWorkspaceFromDirectory(directory, {
+      preferredFileName: activeFile()?.name,
+      requestPermission: false,
+    })
+    return true
+  } catch (error) {
+    console.warn('Could not restore the previous folder.', error)
+    if (folderStatus) folderStatus.textContent = 'Open a folder to edit files on disk'
+    return false
+  }
 }
 
 const openLocalFolder = async (editor: EditorInstance) => {
+  const preferredFileName = activeFile()?.name
   try {
     setStatus('Opening folder…', 'saving')
+    if (folderStatus) folderStatus.textContent = 'Choose a folder…'
+    const capabilities = await getLocalServerCapabilities()
+    if (capabilities) {
+      const requestedPath = await pickLocalServerFolder(
+        window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
+          ?? capabilities.defaultPath,
+      )
+      if (!requestedPath) {
+        setStatus('Folder selection cancelled', 'ready')
+        if (folderStatus) {
+          folderStatus.textContent = selectedServerWorkspace
+            ? `${selectedServerWorkspace.name} · disk-backed`
+            : 'Browser-local files'
+        }
+        return
+      }
+
+      const snapshot = await openLocalServerWorkspace(requestedPath)
+      await loadWorkspaceFromServer(snapshot, { editor, preferredFileName })
+      setStatus(`Opened ${snapshot.workspace.name} from disk`, 'saved')
+      return
+    }
+
     const directory = await pickLocalDirectory()
     if (!directory) {
-      setStatus('Ready to write', 'ready')
+      setStatus('Folder selection cancelled', 'ready')
+      if (folderStatus) {
+        folderStatus.textContent = selectedDirectory
+          ? `${selectedDirectory.name} · disk-backed`
+          : 'Browser-local files'
+      }
       return
     }
 
-    const localFiles = await readLocalTextFiles(directory)
-    if (!localFiles.length) {
-      setStatus('No editable text files found', 'ready')
-      if (folderStatus) folderStatus.textContent = `${directory.name} · no text files`
-      return
-    }
-
-    selectedDirectory = directory
-    if (folderRefreshTimer !== undefined) {
-      window.clearInterval(folderRefreshTimer)
-    }
-    workspaceFiles.splice(
-      0,
-      workspaceFiles.length,
-      ...localFiles.map((file) => ({
-        id: `folder:${file.name}`,
-        name: file.name,
-        markdown: file.name.toLowerCase().endsWith('.md')
-          ? normalizeMarkdownBreaks(file.markdown)
-          : file.markdown,
-        kind: file.name.toLowerCase().endsWith('.csv')
-          ? ('csv' as const)
-          : file.name.toLowerCase().endsWith('.css')
-            ? ('css' as const)
-            : ('markdown' as const),
-        source: 'folder' as const,
-        handle: file.handle,
-      })),
-    )
-    activeFileId =
-      workspaceFiles.find((file) => file.kind === 'markdown')?.id ??
-      workspaceFiles[0]?.id ??
-      ''
-    persistWorkspace()
-    if (folderStatus) {
-      folderStatus.textContent = `${directory.name} · ${workspaceFiles.length} text files`
-    }
-    const file = activeFile()
-    if (documentName && file) documentName.textContent = file.name
-    renderFileList(editor)
-    renderPageFormatOptions()
-    if (file?.kind === 'markdown') {
-      lastMarkdownFileId = file.id
-      showMarkdownEditor()
-      loadMarkdown(editor, file.markdown)
-    } else if (file?.kind === 'csv') {
-      openCsvFile(file)
-    }
-    notifyMarkdownIncludesChanged()
-    folderRefreshTimer = window.setInterval(() => {
-      void refreshFolderFiles(editor)
-    }, 2000)
-    setStatus('Folder opened', 'saved')
+    await loadWorkspaceFromDirectory(directory, {
+      editor,
+      preferredFileName,
+      requestPermission: true,
+    })
+    setStatus(`Opened ${directory.name} from disk`, 'saved')
   } catch (error) {
     console.error('Could not open local folder.', error)
-    setStatus('Could not open folder', 'ready')
-    if (folderStatus) folderStatus.textContent = 'Folder access unavailable'
-  }
-}
-
-const openCssFolder = async (editor: EditorInstance) => {
-  try {
-    const directory = await pickLocalDirectory()
-    if (!directory) return
-    const cssFiles = await readLocalCssFiles(directory)
-    if (!cssFiles.length) {
-      if (folderStatus) folderStatus.textContent = `${directory.name} · no CSS files`
-      return
-    }
-
-    const remainingFiles = workspaceFiles.filter(
-      (file) => !file.id.startsWith('css-folder:'),
-    )
-    workspaceFiles.splice(
-      0,
-      workspaceFiles.length,
-      ...remainingFiles,
-      ...cssFiles.map((file) => ({
-        id: `css-folder:${file.name}`,
-        name: file.name,
-        markdown: file.markdown,
-        kind: 'css' as const,
-        source: 'folder' as const,
-        handle: file.handle,
-      })),
-    )
-    persistWorkspace()
-    renderFileList(editor)
-    if (folderStatus) {
-      folderStatus.textContent = `${directory.name} · ${cssFiles.length} CSS files`
-    }
-  } catch (error) {
-    console.error('Could not open CSS folder.', error)
-    if (folderStatus) folderStatus.textContent = 'CSS folder unavailable'
+    const message = error instanceof Error ? error.message : 'Folder access failed.'
+    setStatus(message, 'ready')
+    if (folderStatus) folderStatus.textContent = message
   }
 }
 
 const startEditor = async () => {
+  await restoreFolderWorkspace()
   const current = activeFile()
   const currentMarkdownFile =
     current?.kind === 'markdown'
@@ -1511,8 +2391,16 @@ const startEditor = async () => {
     activeFileId = currentMarkdownFile.id
   }
   if (currentMarkdownFile) lastMarkdownFileId = currentMarkdownFile.id
-  const currentMarkdown = currentMarkdownFile?.markdown ?? initialMarkdown
-  setStatus(storedMarkdown ? 'Saved locally' : 'Ready to write', 'ready')
+  const currentMarkdown = currentMarkdownFile?.markdown
+    ?? (selectedDirectory || selectedServerWorkspace ? '' : initialMarkdown)
+  setStatus(
+    isDiskBackedFile(currentMarkdownFile)
+      ? 'Loaded from disk'
+      : storedMarkdown
+        ? 'Saved in browser storage'
+        : 'Ready to write',
+    'ready',
+  )
   const initialText = currentMarkdown.trim()
   setStats({
     words: initialText ? initialText.split(/\s+/).length : 0,
@@ -1570,33 +2458,118 @@ const startEditor = async () => {
           const file = activeFile()
           if (file) {
             file.markdown = markdown
-            scheduleDiskSave(file)
+            if (isDiskBackedFile(file) && !isLoadingMarkdown) {
+              dirtyDiskFiles.add(file.id)
+            }
           }
           persistWorkspace()
           setDebugMarkdown(markdown)
           notifyMarkdownIncludesChanged()
           if (editorInstance) scheduleOutlineUpdate(editorInstance)
         },
-        onSaving: () => setStatus('Saving…', 'saving'),
-        onSaved: () => setStatus('Saved locally', 'saved'),
+        onSaving: () => setStatus('Saving locally…', 'saving'),
+        onSaved: () => {
+          const file = activeFile()
+          setStatus(
+            isDiskBackedFile(file)
+              ? dirtyDiskFiles.has(file?.id ?? '')
+                ? 'Edited locally · use Store to write to disk'
+                : 'Stored on disk'
+              : 'Saved in browser storage',
+            'saved',
+          )
+        },
       }),
     )
     .create()
 
   editorInstance = editor
   workspaceEditor = editor
+  configureDiagramCommand(() => addMermaidDiagram(editor))
+  if (currentMarkdownFile) dirtyDiskFiles.delete(currentMarkdownFile.id)
   configureMarkdownIncludeRenderer((markdown) =>
     editor.action((ctx) => ctx.get(parserCtx)(markdown)),
   )
   notifyMarkdownIncludesChanged()
+  await refreshEvaluatedCsvSources()
   persistWorkspace()
-  if (documentName && currentMarkdownFile) {
-    documentName.textContent = currentMarkdownFile.name
-  }
+  updateDocumentNameControls(currentMarkdownFile)
   renderFileList(editor)
   renderPageFormatOptions()
   setDebugMarkdown(getMarkdown(editor))
   scheduleOutlineUpdate(editor)
+
+  let debugRenderTimer: number | undefined
+  let debugSourceComposing = false
+  let debugSourceDirty = false
+
+  const renderDebugSource = () => {
+    debugRenderTimer = undefined
+    const file = activeFile()
+    if (!debugMarkdownContent || file?.kind !== 'markdown') return undefined
+    if (!debugSourceDirty) return getMarkdown(editor)
+
+    const previous = file.markdown
+    try {
+      loadMarkdown(editor, debugMarkdownContent.value, {
+        focus: false,
+        loading: false,
+      })
+      const rendered = getMarkdown(editor)
+      file.markdown = rendered
+      if (rendered !== previous && isDiskBackedFile(file)) {
+        dirtyDiskFiles.add(file.id)
+      }
+      persistWorkspace()
+      notifyMarkdownIncludesChanged()
+      scheduleOutlineUpdate(editor)
+      debugSourceDirty = false
+      return rendered
+    } catch (error) {
+      console.error('Could not render Markdown source.', error)
+      setStatus('Could not render Markdown source', 'ready')
+      return undefined
+    }
+  }
+
+  const flushDebugSource = (normalizeSource = false) => {
+    if (debugRenderTimer !== undefined) {
+      window.clearTimeout(debugRenderTimer)
+      debugRenderTimer = undefined
+    }
+    const rendered = renderDebugSource()
+    if (normalizeSource && rendered !== undefined) {
+      setDebugMarkdown(rendered, true)
+    }
+  }
+
+  const scheduleDebugSourceRender = () => {
+    debugSourceDirty = true
+    if (debugSourceComposing) return
+    if (debugRenderTimer !== undefined) window.clearTimeout(debugRenderTimer)
+    debugRenderTimer = window.setTimeout(renderDebugSource, 180)
+  }
+
+  debugMarkdownContent?.addEventListener('input', scheduleDebugSourceRender)
+  debugMarkdownContent?.addEventListener('compositionstart', () => {
+    debugSourceComposing = true
+    if (debugRenderTimer !== undefined) window.clearTimeout(debugRenderTimer)
+    debugRenderTimer = undefined
+  })
+  debugMarkdownContent?.addEventListener('compositionend', () => {
+    debugSourceComposing = false
+    debugSourceDirty = true
+    scheduleDebugSourceRender()
+  })
+  debugMarkdownContent?.addEventListener('blur', () => {
+    flushDebugSource(true)
+  })
+  debugMarkdownContent?.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      flushDebugSource(true)
+    }
+  })
 
   layoutModeSelect?.addEventListener('change', () => {
     updateLayoutMode(editor, layoutModeSelect.value as PageMode)
@@ -1638,23 +2611,26 @@ const startEditor = async () => {
   })
 
   newFileButton?.addEventListener('click', () => {
-    void createNewFile(editor)
+    void runWorkspaceAction(() => createNewFile(editor))
   })
 
   openFolderButton?.addEventListener('click', () => {
-    void openLocalFolder(editor)
+    void runWorkspaceAction(() => openLocalFolder(editor))
   })
 
-  openCssFolderButton?.addEventListener('click', () => {
-    void openCssFolder(editor)
-  })
+  const renameActiveFile = () => {
+    const file = activeFile()
+    if (file) void runWorkspaceAction(() => renameFile(editor, file.id))
+  }
+  renameDocumentButton?.addEventListener('click', renameActiveFile)
+  renameCsvDocumentButton?.addEventListener('click', renameActiveFile)
 
   document.querySelectorAll<HTMLButtonElement>('[data-project-action]').forEach((button) => {
     button.addEventListener('click', () => {
       if (button.dataset.projectAction === 'reload') {
-        void reloadProject()
+        void runWorkspaceAction(() => reloadProject(editor))
       } else {
-        void storeActiveFile()
+        void runWorkspaceAction(storeActiveFile)
       }
     })
   })
@@ -1666,12 +2642,13 @@ const startEditor = async () => {
 
   csvInsertDiagramButton?.addEventListener('click', () => {
     const file = activeFile()
-    if (file?.kind === 'csv') void addLinkedCsvDiagram(editor, file)
+    if (file?.kind === 'csv') void addMermaidDiagram(editor, file)
   })
 
-  csvConvertDiagramButton?.addEventListener('click', () => {
-    const file = activeFile()
-    if (file?.kind === 'csv') addCsvDiagram(editor, file)
+  document.querySelectorAll<HTMLButtonElement>('[data-file-export]').forEach((button) => {
+    button.addEventListener('click', () => {
+      void runWorkspaceAction(() => exportActiveFile(editor))
+    })
   })
 
   csvCloseButton?.addEventListener('click', () => {
@@ -1682,19 +2659,22 @@ const startEditor = async () => {
 
   copyButton?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(getMarkdown(editor))
-    const originalLabel = copyButton.textContent
-    copyButton.textContent = 'Copied'
+    const originalTitle = copyButton.title
+    setIcon(copyButton, 'check')
+    copyButton.title = 'Markdown copied'
+    copyButton.dataset.tooltip = 'Markdown copied'
     window.setTimeout(() => {
-      copyButton.textContent = originalLabel
+      setIcon(copyButton, 'copy')
+      copyButton.title = originalTitle
+      copyButton.dataset.tooltip = originalTitle
     }, 1200)
   })
 
   window.addEventListener('beforeunload', () => {
-    if (folderRefreshTimer !== undefined) {
-      window.clearInterval(folderRefreshTimer)
-    }
+    if (debugRenderTimer !== undefined) flushDebugSource()
     persistActiveCsv()
     persistWorkspace()
+    csvContextToolbar.destroy()
     editor.destroy()
   })
 }

@@ -5,6 +5,7 @@ import type { NodeViewConstructor } from '@milkdown/kit/prose/view'
 import { $nodeSchema, $remark, $view } from '@milkdown/kit/utils'
 import type { Options as ToMarkdownExtension } from 'mdast-util-to-markdown'
 import type { Processor } from 'unified'
+import { setIcon } from '../icons'
 
 type IncludeAstNode = {
   type?: string
@@ -121,7 +122,7 @@ export const markdownIncludeSchema = $nodeSchema('markdown_include', () => ({
   },
 }))
 
-const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
+const includeView: NodeViewConstructor = (initialNode, view, getPos) => {
   const dom = document.createElement('div')
   dom.className = 'markdown-include'
   dom.contentEditable = 'false'
@@ -131,7 +132,16 @@ const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
   const label = document.createElement('span')
   label.className = 'markdown-include-label'
   const file = document.createElement('code')
-  header.append(label, file)
+  const identity = document.createElement('div')
+  identity.className = 'markdown-include-identity'
+  identity.append(label, file)
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'markdown-include-remove'
+  setIcon(remove, 'close')
+  remove.dataset.tooltip = 'Remove include'
+  remove.setAttribute('aria-label', 'Remove include')
+  header.append(identity, remove)
 
   const content = document.createElement('div')
   content.className = 'markdown-include-content'
@@ -142,7 +152,7 @@ const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
   const render = () => {
     const fileName = String(currentNode.attrs.file ?? '')
     const markdown = resolveInclude(fileName)
-    label.textContent = markdown === undefined ? 'Missing Markdown file' : 'Included Markdown'
+    label.textContent = markdown === undefined ? 'Missing included file' : 'Included file'
     file.textContent = fileName
     content.replaceChildren()
 
@@ -180,6 +190,19 @@ const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
   }
 
   const onIncludeChange = () => render()
+  const onRemove = (event: MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const position = getPos?.()
+    if (typeof position !== 'number') return
+    const node = view.state.doc.nodeAt(position)
+    if (!node || node.type !== currentNode.type) return
+    view.dispatch(
+      view.state.tr.delete(position, position + node.nodeSize).scrollIntoView(),
+    )
+    view.focus()
+  }
+  remove.addEventListener('click', onRemove)
   includeChangeListeners.add(onIncludeChange)
   render()
 
@@ -193,9 +216,12 @@ const includeView: NodeViewConstructor = (initialNode, view, _getPos) => {
       }
       return true
     },
-    stopEvent: () => true,
+    // Let ProseMirror select and delete the atom normally. Only the explicit
+    // remove control belongs to the node view itself.
+    stopEvent: (event) => remove.contains(event.target as globalThis.Node),
     ignoreMutation: () => true,
     destroy: () => {
+      remove.removeEventListener('click', onRemove)
       includeChangeListeners.delete(onIncludeChange)
       dom.remove()
     },

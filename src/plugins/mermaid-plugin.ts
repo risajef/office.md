@@ -15,6 +15,7 @@ let renderSequence = 0
 let resolveCsvSource: (fileName: string) => string | undefined = () => undefined
 
 const csvDataChangedEvent = 'milkdown-csv-data-changed'
+const mermaidThemeChangedEvent = 'milkdown-mermaid-theme-changed'
 
 export const configureMermaidCsvResolver = (
   resolver: (fileName: string) => string | undefined,
@@ -24,6 +25,11 @@ export const configureMermaidCsvResolver = (
 
 export const notifyMermaidCsvDataChanged = () => {
   window.dispatchEvent(new Event(csvDataChangedEvent))
+}
+
+/** Reapply document typography after a scoped CSS theme changes. */
+export const notifyMermaidThemeChanged = () => {
+  window.dispatchEvent(new Event(mermaidThemeChangedEvent))
 }
 
 const isMermaidBlock = (node: Node) =>
@@ -59,20 +65,32 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
   const preview = document.createElement('div')
   preview.className = 'mermaid-preview'
   preview.title = 'Click to edit Mermaid source'
-
-  const details = document.createElement('details')
-  const summary = document.createElement('summary')
-  summary.textContent = 'Mermaid source'
-  const source = document.createElement('pre')
-  const sourceCode = document.createElement('code')
-  source.append(sourceCode)
-  details.append(summary, source)
-  dom.append(preview, details)
+  dom.append(preview)
 
   let currentNode = initialNode
   let currentRender = 0
   let editing = false
   let sourceEditor: HTMLTextAreaElement | undefined
+
+  const applySvgTypography = () => {
+    const svg = preview.querySelector<SVGElement>('svg')
+    if (!svg) return
+    const styles = window.getComputedStyle(dom)
+    const fontFamily = styles.fontFamily
+    const targets: Element[] = [
+      svg,
+      ...svg.querySelectorAll(
+        'text, tspan, foreignObject, foreignObject *, .label, .nodeLabel',
+      ),
+    ]
+    targets.forEach((target) => {
+      ;(target as HTMLElement | SVGElement).style.setProperty(
+        'font-family',
+        fontFamily,
+        'important',
+      )
+    })
+  }
 
   // The code fence belongs to the surrounding Markdown document, not to the
   // Mermaid source. Keep it out of the editor so edits cannot accidentally
@@ -88,7 +106,6 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
   const render = (node: Node) => {
     currentNode = node
     const code = node.textContent.trim()
-    sourceCode.textContent = code
     dom.hidden = !code && !editing
     if (!code) {
       preview.replaceChildren()
@@ -107,7 +124,10 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     mermaid
       .render(`milkdown-mermaid-${renderId}`, renderCode)
       .then(({ svg }) => {
-        if (currentRender === renderId) preview.innerHTML = svg
+        if (currentRender === renderId) {
+          preview.innerHTML = svg
+          applySvgTypography()
+        }
       })
       .catch((error: unknown) => {
         if (currentRender !== renderId) return
@@ -128,7 +148,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     editing = false
     sourceEditor = undefined
     dom.classList.remove('is-editing')
-    dom.replaceChildren(preview, details)
+    dom.replaceChildren(preview)
 
     if (typeof position === 'number') {
       const codeBlock = view.state.schema.nodes.code_block
@@ -188,7 +208,11 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
   const onCsvDataChanged = () => {
     if (!editing && getCsvSourceName(currentNode)) render(currentNode)
   }
+  const onThemeChanged = () => {
+    if (!editing) applySvgTypography()
+  }
   window.addEventListener(csvDataChangedEvent, onCsvDataChanged)
+  window.addEventListener(mermaidThemeChangedEvent, onThemeChanged)
   queueMicrotask(() => {
     render(initialNode)
     if (!initialNode.textContent.trim()) startEditing()
@@ -210,6 +234,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
       preview.removeEventListener('click', startEditing)
       document.removeEventListener('pointerdown', onDocumentPointerDown)
       window.removeEventListener(csvDataChangedEvent, onCsvDataChanged)
+      window.removeEventListener(mermaidThemeChangedEvent, onThemeChanged)
       dom.remove()
     },
   }

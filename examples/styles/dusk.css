@@ -1,0 +1,27 @@
+:root {
+  --page-bg: #1c1c24;
+  --ink: #e5e5ef;
+  --heading-ink: #f3f1ff;
+  --muted: #aaa9ba;
+  --line: #474754;
+  --paper: #282832;
+  --accent: #b7afff;
+  --accent-soft: #3b3857;
+  --diagram-bg: #202029;
+  --diagram-node: #363642;
+  --diagram-node-border: #9f97ee;
+  --diagram-text: #eeeef7;
+  --diagram-line: #aaa4de;
+  --diagram-label-bg: #282832;
+  --document-font: "Palatino Linotype", Palatino, Georgia, serif;
+  --heading-font: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --code-font: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --diagram-font: var(--heading-font);
+  color-scheme: dark;
+}
+
+#editor .ProseMirror :not(pre) > code {
+  border: 1px solid #554f75;
+  color: #eee9ff;
+  background: #403b5b;
+}

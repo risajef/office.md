@@ -212,36 +212,3 @@ export const expandCsvReferences = (source: string, csv: string) => {
       : `${reference}["${escapeMermaidLabel(value)}"]`
   })
 }
-
-const mermaidId = (prefix: string, index: number) => `${prefix}${index + 1}`
-
-/** Convert the first two columns of a CSV into a portable Mermaid flowchart. */
-export const csvToMermaidFlowchart = (source: string) => {
-  const rows = normalizeCsvRows(parseCsv(source))
-  const [, ...body] = rows
-  const values = new Map<string, string>()
-  const edges: Array<[string, string]> = []
-
-  const getId = (value: string) => {
-    const existing = values.get(value)
-    if (existing) return existing
-    const id = `csvNode${values.size + 1}`
-    values.set(value, id)
-    return id
-  }
-
-  body.forEach((row, index) => {
-    const left = row[0]?.trim() ?? ''
-    const right = row[1]?.trim() ?? ''
-    if (left && right) edges.push([getId(left), getId(right)])
-    else if (left) getId(left)
-    else if (right) getId(right)
-    if (!left && !right && index === 0) return
-  })
-
-  const labels = [...values.entries()].map(
-    ([value, id]) => `  ${id}["${escapeMermaidLabel(value)}"]`,
-  )
-  const links = edges.map(([left, right]) => `  ${left} --> ${right}`)
-  return ['flowchart LR', ...labels, ...links].join('\n')
-}

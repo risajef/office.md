@@ -48,7 +48,7 @@ const getAvailableWidth = (view: EditorView, fallback: number) => {
   if (wrap) {
     const styles = window.getComputedStyle(wrap)
     const horizontalPadding = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight)
-    return Math.max(0, wrap.getBoundingClientRect().width - horizontalPadding)
+    return Math.max(0, wrap.clientWidth - horizontalPadding)
   }
   const stage = getStage(view)
   return stage?.parentElement?.clientWidth ?? stage?.clientWidth ?? fallback
@@ -75,6 +75,23 @@ const getPageScale = (view: EditorView, settings: PageLayoutSettings) => {
   ))
 }
 
+const getLogicalPageGap = (
+  view: EditorView,
+  settings: PageLayoutSettings,
+  scale: number,
+) => {
+  if (!isFullscreenPresentation(settings)) return pageGap
+
+  // A page can be width-limited in fullscreen and consequently shorter than
+  // the viewport. Fill that unused vertical space with the inter-page gap so
+  // the next page never peeks into the current slide.
+  const unusedViewportHeight = Math.max(
+    0,
+    window.innerHeight - settings.height * scale,
+  )
+  return round(Math.max(pageGap, unusedViewportHeight / scale))
+}
+
 const setSurfaceMetrics = (view: EditorView, settings: PageLayoutSettings) => {
   const { dom } = view
   const stage = getStage(view)
@@ -96,6 +113,7 @@ const setSurfaceMetrics = (view: EditorView, settings: PageLayoutSettings) => {
     stage?.removeAttribute('data-page-mode')
     getEditorHost(view)?.style.removeProperty('--page-viewport-height')
     getEditorWrap(view)?.style.removeProperty('--page-viewport-height')
+    dom.style.removeProperty('min-height')
     stage?.style.removeProperty('width')
     stage?.style.removeProperty('height')
     stage?.style.removeProperty('min-height')
@@ -105,6 +123,7 @@ const setSurfaceMetrics = (view: EditorView, settings: PageLayoutSettings) => {
   }
 
   const scale = getPageScale(view, settings)
+  const logicalPageGap = getLogicalPageGap(view, settings, scale)
   const renderedWidth = round(settings.width * scale)
   const renderedHeight = round(settings.height * scale)
   const renderedOuterTop = settings.mode === 'presentation'
@@ -122,7 +141,7 @@ const setSurfaceMetrics = (view: EditorView, settings: PageLayoutSettings) => {
     '--page-width': `${round(settings.width)}px`,
     '--page-height': `${round(settings.height)}px`,
     '--page-margin': `${round(settings.margin)}px`,
-    '--page-gap': `${pageGap}px`,
+    '--page-gap': `${logicalPageGap}px`,
     '--page-scale': `${scale}`,
     '--page-rendered-width': `${renderedWidth}px`,
   }
@@ -158,33 +177,34 @@ const breakHeight = (decoration: Decoration) =>
 const makeBreakDecoration = (
   kind: 'automatic' | 'forced',
   height: number,
-  from: number,
-  to: number,
+  position: number,
   scale: number,
-) => Decoration.node(
-  from,
-  to,
-  {
-    class: 'page-layout-break-before',
-    'data-page-break': kind,
-    style: `margin-top: ${Math.max(0, round(height / scale))}px`,
+) => Decoration.widget(
+  position,
+  () => {
+    const gap = document.createElement('div')
+    gap.className = 'page-layout-gap'
+    gap.dataset.pageBreak = kind
+    gap.setAttribute('aria-hidden', 'true')
+    gap.setAttribute('contenteditable', 'false')
+    gap.style.height = `${Math.max(0, round(height / scale))}px`
+    return gap
   },
   {
-    key: `page-break-${kind}-${from}-${round(height)}`,
+    key: `page-break-${kind}-${position}-${round(height)}`,
+    side: -1,
     pageBreak: kind,
     height: round(height / scale),
   },
 )
 
 const getBreakHeight = (
-  top: number,
-  editorTop: number,
+  relativeTop: number,
   renderedHeight: number,
   renderedMargin: number,
   renderedGap: number,
 ) => {
   const renderedSpan = renderedHeight + renderedGap
-  const relativeTop = Math.max(0, top - editorTop)
   const pageIndex = Math.max(
     0,
     Math.floor(Math.max(0, relativeTop - renderedMargin) / renderedSpan),
@@ -210,39 +230,50 @@ const buildDecorations = (
   const renderedScale = getPageScale(view, settings)
   const renderedHeight = settings.height * renderedScale
   const renderedMargin = settings.margin * renderedScale
-  const renderedGap = pageGap * renderedScale
+  const renderedGap = getLogicalPageGap(view, settings, renderedScale) * renderedScale
   const renderedSpan = renderedHeight + renderedGap
   const pageContentBottom = (pageIndex: number) =>
     pageIndex * renderedSpan + renderedHeight - renderedMargin
   const decorations: Decoration[] = []
-  const contentElements = Array.from(view.dom.children)
-  const forcedBlockPositions = new Set<number>()
-  const getExistingGap = (index: number, top: number) => {
-    for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
-      const previousElement = contentElements[previousIndex]
-      if (!(previousElement instanceof HTMLElement)) continue
-      const previousBounds = previousElement.getBoundingClientRect()
-      const previousStyles = window.getComputedStyle(previousElement)
-      if (
-        previousStyles.display === 'none'
-        || (previousBounds.width === 0 && previousBounds.height === 0)
-      ) continue
-      return Math.max(0, top - previousBounds.bottom)
+  const existingDecorations = pageLayoutKey
+    .getState(view.state)
+    ?.decorations.find() ?? []
+  const existingBreaks = existingDecorations
+    .map((decoration) => ({
+      position: decoration.from,
+      renderedHeight: breakHeight(decoration) * renderedScale,
+    }))
+    .sort((left, right) => left.position - right.position)
+  const existingShiftAt = (position: number) => existingBreaks.reduce(
+    (total, pageBreak) => pageBreak.position <= position
+      ? total + pageBreak.renderedHeight
+      : total,
+    0,
+  )
+  const naturalBoundsAt = (position: number) => {
+    const dom = view.nodeDOM(position)
+    const element = dom instanceof HTMLElement
+      ? dom
+      : dom?.parentElement
+    if (!element) return undefined
+    const bounds = element.getBoundingClientRect()
+    const existingShift = existingShiftAt(position)
+    return {
+      top: bounds.top - editorTop - existingShift,
+      bottom: bounds.bottom - editorTop - existingShift,
+      height: bounds.height,
     }
-    return 0
   }
-  let plannedMargin = 0
+  const forcedBlockPositions = new Set<number>()
+  let plannedBreakHeight = 0
   let pageCount = 1
 
   view.state.doc.forEach((node, offset, index) => {
-    const element = contentElements[index] instanceof HTMLElement
-      ? contentElements[index]
-      : undefined
+    const bounds = naturalBoundsAt(offset)
     const isLastNode = index === view.state.doc.childCount - 1
-    if (element) {
-      const bounds = element.getBoundingClientRect()
-      const relativeTop = bounds.top - editorTop + plannedMargin
-      const relativeBottom = bounds.bottom - editorTop + plannedMargin
+    if (bounds) {
+      const relativeTop = bounds.top + plannedBreakHeight
+      const relativeBottom = bounds.bottom + plannedBreakHeight
       const isForcedBreak = node.type.name === 'hr' && !isLastNode
       if (isForcedBreak) {
         let nextIndex = index + 1
@@ -256,33 +287,31 @@ const buildDecorations = (
         const nextNode = nextIndex < view.state.doc.childCount
           ? view.state.doc.child(nextIndex)
           : undefined
-        const nextElement = nextIndex < contentElements.length
-          ? contentElements[nextIndex]
-          : undefined
         if (nextNode && !forcedBlockPositions.has(nextBlockPosition)) {
           forcedBlockPositions.add(nextBlockPosition)
-          const nextBounds = nextElement?.getBoundingClientRect()
+          const nextBounds = naturalBoundsAt(nextBlockPosition)
+          const nextTop = (nextBounds?.top ?? bounds.bottom) + plannedBreakHeight
           const breakDistance = getBreakHeight(
-            nextBounds?.top ?? (relativeBottom + editorTop),
-            editorTop,
+            nextTop,
             renderedHeight,
             renderedMargin,
             renderedGap,
           )
-          const height = breakDistance + (
-            nextBounds ? getExistingGap(nextIndex, nextBounds.top) : 0
-          )
           decorations.push(
             makeBreakDecoration(
               'forced',
-              height,
+              breakDistance,
               nextBlockPosition,
-              nextBlockPosition + nextNode.nodeSize,
               renderedScale,
             ),
           )
-          plannedMargin += breakDistance
-          pageCount += 1
+          plannedBreakHeight += breakDistance
+          pageCount = Math.max(
+            pageCount,
+            Math.floor(
+              Math.max(0, nextTop + breakDistance - renderedMargin) / renderedSpan,
+            ) + 1,
+          )
         }
       } else {
         const pageIndex = Math.max(
@@ -290,32 +319,35 @@ const buildDecorations = (
           Math.floor(Math.max(0, relativeTop - renderedMargin) / renderedSpan),
         )
         const oversized = bounds.height > renderedHeight - renderedMargin * 2
+        let insertedBreakHeight = 0
         if (
           relativeBottom > pageContentBottom(pageIndex) + 1 &&
           !(relativeTop <= pageIndex * renderedSpan + renderedMargin + 1 && oversized)
         ) {
           const breakDistance = getBreakHeight(
-            relativeTop + editorTop,
-            editorTop,
+            relativeTop,
             renderedHeight,
             renderedMargin,
             renderedGap,
           )
-          const height = breakDistance + getExistingGap(index, bounds.top)
           decorations.push(
             makeBreakDecoration(
               'automatic',
-              height,
+              breakDistance,
               offset,
-              offset + node.nodeSize,
               renderedScale,
             ),
           )
-          plannedMargin += breakDistance
-          pageCount = pageIndex + 2
-        } else {
-          pageCount = Math.max(pageCount, pageIndex + 1)
+          plannedBreakHeight += breakDistance
+          insertedBreakHeight = breakDistance
         }
+        const finalBottom = relativeBottom + insertedBreakHeight
+        pageCount = Math.max(
+          pageCount,
+          Math.floor(
+            Math.max(0, finalBottom - renderedMargin) / renderedSpan,
+          ) + 1,
+        )
       }
     }
   })
@@ -332,16 +364,28 @@ const buildDecorations = (
   }
 }
 
-const setStageSize = (view: EditorView, settings: PageLayoutSettings) => {
+const setStageSize = (
+  view: EditorView,
+  settings: PageLayoutSettings,
+  pageCount: number,
+) => {
   if (settings.mode === 'continuous') return
   const stage = getStage(view)
   if (!stage) return
 
   const scale = getPageScale(view, settings)
-  const logicalHeight = Math.max(settings.height, view.dom.offsetHeight)
+  const logicalPageGap = getLogicalPageGap(view, settings, scale)
+  const normalizedPageCount = Math.max(1, pageCount)
+  const gapCount = isFullscreenPresentation(settings)
+    ? normalizedPageCount
+    : Math.max(0, normalizedPageCount - 1)
+  const completePageHeight = normalizedPageCount * settings.height +
+    gapCount * logicalPageGap
+  const logicalHeight = Math.max(completePageHeight, view.dom.offsetHeight)
   const outerHeight = settings.mode === 'presentation'
     ? 0
     : (pageOuterTop + pageOuterBottom) * scale
+  view.dom.style.setProperty('min-height', `${round(completePageHeight)}px`)
   stage.style.setProperty('height', `${round(logicalHeight * scale + outerHeight)}px`)
 }
 
@@ -376,6 +420,7 @@ export const pageLayoutPlugin = (options: PageLayoutPluginOptions) =>
       let frame: number | undefined
       let lastSignature = ''
       let observedWidth: number | undefined
+      let observedHeight: number | undefined
 
       const refresh = () => {
         frame = undefined
@@ -392,24 +437,11 @@ export const pageLayoutPlugin = (options: PageLayoutPluginOptions) =>
             ),
           )
         }
-        setStageSize(view, settings)
+        setStageSize(view, settings, result.pageCount)
         options.onPageCountChange?.(settings.mode === 'continuous' ? 0 : result.pageCount)
       }
 
-      const resetLayout = () => {
-        lastSignature = ''
-        if (pageLayoutKey.getState(view.state)?.decorations.find().length) {
-          view.dispatch(
-            view.state.tr.setMeta(
-              pageLayoutKey,
-              { type: 'refresh' } satisfies PageLayoutMeta,
-            ),
-          )
-        }
-      }
-
-      const schedule = (reset = false) => {
-        if (reset) resetLayout()
+      const schedule = () => {
         if (frame !== undefined) return
         frame = window.requestAnimationFrame(refresh)
       }
@@ -417,21 +449,17 @@ export const pageLayoutPlugin = (options: PageLayoutPluginOptions) =>
       const resizeObserver = typeof ResizeObserver === 'undefined'
         ? undefined
         : new ResizeObserver(() => {
-            const width = getEditorWrap(view)?.getBoundingClientRect().width
+            const width = getEditorWrap(view)?.clientWidth
+            const height = view.dom.scrollHeight
             const widthChanged = width !== undefined && width !== observedWidth
+            const heightChanged = height !== observedHeight
             observedWidth = width
-            if (widthChanged) schedule(true)
+            observedHeight = height
+            if (widthChanged || heightChanged) schedule()
           })
-          resizeObserver?.observe(getEditorWrap(view) ?? view.dom)
-      const mutationObserver = typeof MutationObserver === 'undefined'
-        ? undefined
-        : new MutationObserver((mutations) => {
-            if (mutations.some((mutation) => mutation.type === 'childList')) {
-              schedule(true)
-            }
-          })
-      mutationObserver?.observe(view.dom, { childList: true, subtree: true })
-      const handleWindowResize = () => schedule(true)
+      resizeObserver?.observe(getEditorWrap(view) ?? view.dom)
+      resizeObserver?.observe(view.dom)
+      const handleWindowResize = () => schedule()
       window.addEventListener('resize', handleWindowResize)
       schedule()
 
@@ -452,7 +480,6 @@ export const pageLayoutPlugin = (options: PageLayoutPluginOptions) =>
         destroy: () => {
           if (frame !== undefined) window.cancelAnimationFrame(frame)
           resizeObserver?.disconnect()
-          mutationObserver?.disconnect()
           window.removeEventListener('resize', handleWindowResize)
         },
       }

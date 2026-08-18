@@ -3,9 +3,11 @@
 Open `graph.csv` in the editor's Files panel to edit it as a spreadsheet.
 
 - **Insert table** adds the CSV as a Markdown table.
-- **Linked Mermaid** asks for a Mermaid template and keeps the CSV filename in
-  the code fence, for example `mermaid(graph.csv)`.
-- **CSV → diagram** creates a one-time flowchart from the first two columns.
+- **Mermaid** can create a normal diagram or link one to a selected CSV. A
+  linked template keeps the filename in the code fence, for example
+  `mermaid(graph.csv)`.
+- **Export** creates portable Markdown with the references replaced by their
+  current values. CSV export replaces formulas with their calculated values.
 
 In a linked diagram, bare cell references such as `A2` and `B2` are labelled
 from the current CSV values whenever the diagram is rendered.

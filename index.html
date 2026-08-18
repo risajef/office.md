@@ -26,10 +26,17 @@
           <div class="workspace-main">
             <section class="editor-card" aria-label="Markdown editor">
           <div class="editor-toolbar">
-            <div class="document-name">
-              <span class="file-icon" aria-hidden="true">✦</span>
+            <button
+              class="document-name"
+              id="rename-document"
+              type="button"
+              title="Rename document"
+              data-tooltip="Rename document"
+            >
+              <span class="file-icon" data-icon="file-text" aria-hidden="true"></span>
               <span id="document-name">untitled.md</span>
-            </div>
+              <span class="document-name-edit" data-icon="edit" aria-hidden="true"></span>
+            </button>
             <div class="layout-controls" aria-label="Document view controls">
               <label class="layout-control">
                 <span>View</span>
@@ -43,34 +50,72 @@
                 <span>Page</span>
                 <select id="page-format" aria-label="Page format"></select>
               </label>
-              <button class="copy-button page-settings-button" id="page-settings" type="button">
-                Adjust
-              </button>
+              <button
+                class="copy-button page-settings-button"
+                id="page-settings"
+                type="button"
+                title="Adjust page settings"
+                data-tooltip="Adjust page settings"
+                data-icon="sliders"
+                aria-label="Adjust page settings"
+              ></button>
               <span class="page-count" id="page-count" aria-live="polite"></span>
-              <button class="copy-button present-button" id="present-document" type="button">
-                Present
-              </button>
+              <button
+                class="copy-button present-button"
+                id="present-document"
+                type="button"
+                title="Present document"
+                data-tooltip="Present document"
+                data-icon="fullscreen"
+                aria-label="Present document"
+              ></button>
             </div>
             <div class="toolbar-actions">
-              <span class="save-status" id="save-status">
+              <span
+                class="save-status"
+                id="save-status"
+                title="Ready to write"
+                aria-label="Ready to write"
+              >
                 <span class="status-dot" aria-hidden="true"></span>
-                <span id="save-status-label">Ready to write</span>
+                <span id="save-status-label" aria-hidden="true"></span>
               </span>
               <button
                 class="copy-button project-action"
                 data-project-action="store"
                 type="button"
-                title="Store the current file"
-              >Store file</button>
+                title="Write the current file to disk"
+                data-tooltip="Write the current file to disk"
+                data-icon="save"
+                aria-label="Write the current file to disk"
+              ></button>
               <button
                 class="copy-button project-action"
                 data-project-action="reload"
                 type="button"
-                title="Reload project files from disk and clear the cached workspace"
-              >Reload project</button>
-              <button class="copy-button" id="copy-markdown" type="button">
-                Copy markdown
-              </button>
+                title="Reload the open folder from disk"
+                data-tooltip="Reload the open folder from disk"
+                data-icon="refresh"
+                aria-label="Reload the open folder from disk"
+              ></button>
+              <button
+                class="copy-button"
+                data-file-export
+                type="button"
+                title="Export file"
+                data-tooltip="Export file"
+                data-icon="download"
+                aria-label="Export file"
+              ></button>
+              <button
+                class="copy-button"
+                id="copy-markdown"
+                type="button"
+                title="Copy Markdown"
+                data-tooltip="Copy Markdown"
+                data-icon="copy"
+                aria-label="Copy Markdown"
+              ></button>
             </div>
           </div>
 
@@ -92,45 +137,104 @@
               aria-label="CSV spreadsheet editor"
             >
               <div class="editor-toolbar csv-editor-toolbar">
-                <div class="document-name">
-                  <span class="file-icon" aria-hidden="true">▦</span>
+                <button
+                  class="document-name"
+                  id="rename-csv-document"
+                  type="button"
+                  title="Rename spreadsheet"
+                  data-tooltip="Rename spreadsheet"
+                >
+                  <span class="file-icon" data-icon="sheet" aria-hidden="true"></span>
                   <span id="csv-editor-name">CSV spreadsheet</span>
-                </div>
+                  <span class="document-name-edit" data-icon="edit" aria-hidden="true"></span>
+                </button>
                 <div class="csv-editor-actions">
-                  <span id="csv-editor-status" class="save-status">Ready</span>
+                  <span
+                    id="csv-editor-status"
+                    class="save-status"
+                    title="Ready"
+                    aria-label="Ready"
+                  ><span class="status-dot" aria-hidden="true"></span></span>
                   <button
                     class="copy-button project-action"
                     data-project-action="store"
                     type="button"
-                    title="Store the current file"
-                  >Store file</button>
+                    title="Write the current file to disk"
+                    data-tooltip="Write the current file to disk"
+                    data-icon="save"
+                    aria-label="Write the current file to disk"
+                  ></button>
                   <button
                     class="copy-button project-action"
                     data-project-action="reload"
                     type="button"
-                    title="Reload project files from disk and clear the cached workspace"
-                  >Reload project</button>
-                  <button class="copy-button" id="csv-insert-table" type="button">Insert table</button>
-                  <button class="copy-button" id="csv-insert-diagram" type="button">Linked Mermaid</button>
-                  <button class="copy-button" id="csv-convert-diagram" type="button">CSV → diagram</button>
-                  <button class="copy-button" id="csv-close" type="button">Back to Markdown</button>
+                    title="Reload the open folder from disk"
+                    data-tooltip="Reload the open folder from disk"
+                    data-icon="refresh"
+                    aria-label="Reload the open folder from disk"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    data-file-export
+                    type="button"
+                    title="Export evaluated CSV"
+                    data-tooltip="Export evaluated CSV"
+                    data-icon="download"
+                    aria-label="Export evaluated CSV"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    id="csv-insert-table"
+                    type="button"
+                    title="Insert the current CSV as a Markdown table"
+                    data-tooltip="Insert the current CSV as a Markdown table"
+                    data-icon="table"
+                    aria-label="Insert the current CSV as a Markdown table"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    id="csv-insert-diagram"
+                    type="button"
+                    title="Insert Mermaid diagram"
+                    data-tooltip="Insert Mermaid diagram"
+                    data-icon="diagram"
+                    aria-label="Insert Mermaid diagram"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    id="csv-close"
+                    type="button"
+                    title="Return to the Markdown editor"
+                    data-tooltip="Return to the Markdown editor"
+                    data-icon="arrow-left"
+                    aria-label="Return to the Markdown editor"
+                  ></button>
                 </div>
               </div>
               <div id="csv-spreadsheet" class="csv-spreadsheet"></div>
             </section>
 
-            <section
+            <details
               class="debug-markdown"
               id="debug-markdown-view"
+              open
               hidden
-              aria-label="Read-only Markdown debug view"
+              aria-label="Editable Markdown source"
             >
-              <div class="debug-markdown-header">
-                <span>Read-only Markdown</span>
+              <summary class="debug-markdown-header">
+                <span>Markdown source</span>
                 <span>Debug mode</span>
+              </summary>
+              <div class="debug-markdown-body">
+                <textarea
+                  id="debug-markdown-content"
+                  aria-label="Markdown source"
+                  placeholder="Empty Markdown document"
+                  spellcheck="false"
+                  wrap="off"
+                ></textarea>
               </div>
-              <pre><code id="debug-markdown-content"></code></pre>
-            </section>
+            </details>
           </div>
 
           <div
@@ -139,7 +243,7 @@
             role="separator"
             aria-label="Resize editor"
             aria-orientation="vertical"
-            aria-valuemin="420"
+            aria-valuemin="520"
             aria-valuenow="0"
             tabindex="0"
           ></div>
@@ -148,11 +252,10 @@
             <section class="sidebar-section files-section">
               <div class="sidebar-heading">
                 <h2>Files</h2>
-                <button class="sidebar-action" id="new-file" type="button" aria-label="Create file">+</button>
+                <button class="sidebar-action" id="new-file" type="button" data-icon="plus" aria-label="Create file"></button>
               </div>
               <div class="folder-actions">
                 <button class="folder-button" id="open-folder" type="button">Open folder</button>
-                <button class="folder-button" id="open-css-folder" type="button">CSS folder</button>
               </div>
               <p class="folder-status" id="folder-status">Browser-local files</p>
               <ul class="file-list" id="file-list"></ul>

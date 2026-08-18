@@ -1,0 +1,13 @@
+:root {
+  --page-bg: #edf2ec;
+  --ink: #263329;
+  --muted: #748078;
+  --line: #d2ddd3;
+  --paper: #f9fcf8;
+  --accent: #3b8560;
+  --accent-soft: #e0f0e5;
+  --document-font: Athelas, Charter, Georgia, serif;
+  --heading-font: Optima, Candara, "Segoe UI", sans-serif;
+  --code-font: "Source Code Pro", Consolas, "Liberation Mono", monospace;
+  --diagram-font: var(--heading-font);
+}

@@ -1,0 +1,13 @@
+:root {
+  --page-bg: #f8eeee;
+  --ink: #39292c;
+  --muted: #8b7176;
+  --line: #ead5d7;
+  --paper: #fffafa;
+  --accent: #bd5973;
+  --accent-soft: #fbe4ea;
+  --document-font: Charter, "Bitstream Charter", Georgia, serif;
+  --heading-font: "Gill Sans", "Trebuchet MS", sans-serif;
+  --code-font: "IBM Plex Mono", Consolas, "Liberation Mono", monospace;
+  --diagram-font: var(--heading-font);
+}

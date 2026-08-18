@@ -1,0 +1,17 @@
+:root {
+  --page-bg: #eef7f5;
+  --ink: #173c3a;
+  --muted: #63807c;
+  --line: #c8e3de;
+  --paper: #fbfffe;
+  --accent: #118b78;
+  --accent-soft: #dff5ef;
+  --document-font: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --heading-font: Optima, Candara, "Segoe UI", sans-serif;
+  --code-font: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --diagram-font: var(--heading-font);
+}
+
+.editor-card {
+  border-radius: 24px;
+}

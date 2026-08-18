@@ -23,6 +23,7 @@ import {
 import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
 import { TooltipProvider, tooltipFactory } from '@milkdown/plugin-tooltip'
 import { mathInlineSchema } from './latex-plugin'
+import { setIcon, type IconName } from '../icons'
 
 const [richContentTooltip, richContentTooltipPlugin] =
   tooltipFactory('rich-content')
@@ -45,6 +46,17 @@ type Command =
   | 'code_block'
   | 'formula'
   | 'diagram'
+
+type DiagramCommandHandler = (
+  view: EditorView,
+) => boolean | Promise<boolean>
+
+let diagramCommandHandler: DiagramCommandHandler | undefined
+
+/** Connect the editor toolbar to the workspace-aware Mermaid workflow. */
+export const configureDiagramCommand = (handler: DiagramCommandHandler) => {
+  diagramCommandHandler = handler
+}
 
 type TableCommand =
   | 'add-row-before'
@@ -130,54 +142,73 @@ export const requestText = (
   })
 }
 
-const commands: Array<[label: string, title: string, command: Command]> = [
-  ['↶', 'Undo', 'undo'],
-  ['↷', 'Redo', 'redo'],
-  ['B', 'Bold', 'strong'],
-  ['I', 'Italic', 'emphasis'],
-  ['S', 'Strikethrough', 'strike_through'],
-  ['</>', 'Inline code', 'inlineCode'],
-  ['H1', 'Heading 1', 'heading1'],
-  ['H2', 'Heading 2', 'heading2'],
-  ['•', 'Bullet list', 'bullet_list'],
-  ['1.', 'Numbered list', 'ordered_list'],
-  ['❝', 'Blockquote', 'blockquote'],
-  ['▦', 'Insert table', 'table'],
-  ['Code', 'Code block', 'code_block'],
-  ['↗', 'Add link', 'link'],
-  ['∑', 'Insert LaTeX formula', 'formula'],
-  ['◇', 'Insert Mermaid diagram', 'diagram'],
+type CommandSpec = {
+  icon: IconName
+  title: string
+  command: Command
+  group: 'history' | 'text' | 'structure' | 'insert'
+}
+
+const commands: CommandSpec[] = [
+  { icon: 'undo', title: 'Undo', command: 'undo', group: 'history' },
+  { icon: 'redo', title: 'Redo', command: 'redo', group: 'history' },
+  { icon: 'bold', title: 'Bold', command: 'strong', group: 'text' },
+  { icon: 'italic', title: 'Italic', command: 'emphasis', group: 'text' },
+  { icon: 'strikethrough', title: 'Strikethrough', command: 'strike_through', group: 'text' },
+  { icon: 'code', title: 'Inline code', command: 'inlineCode', group: 'text' },
+  { icon: 'link', title: 'Add link', command: 'link', group: 'text' },
+  { icon: 'heading-1', title: 'Heading 1', command: 'heading1', group: 'structure' },
+  { icon: 'heading-2', title: 'Heading 2', command: 'heading2', group: 'structure' },
+  { icon: 'list-bulleted', title: 'Bullet list', command: 'bullet_list', group: 'structure' },
+  { icon: 'list-numbered', title: 'Numbered list', command: 'ordered_list', group: 'structure' },
+  { icon: 'quote', title: 'Blockquote', command: 'blockquote', group: 'structure' },
+  { icon: 'table', title: 'Insert table', command: 'table', group: 'insert' },
+  { icon: 'code-block', title: 'Code block', command: 'code_block', group: 'insert' },
+  { icon: 'formula', title: 'Insert LaTeX formula', command: 'formula', group: 'insert' },
+  { icon: 'diagram', title: 'Insert Mermaid diagram', command: 'diagram', group: 'insert' },
 ]
 
-const createButton = (label: string, title: string, command: string) => {
+const createButton = (icon: IconName, title: string, command: string) => {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'rich-content-button'
   button.dataset.command = command
   button.title = title
+  button.dataset.tooltip = title
   button.setAttribute('aria-label', title)
-  button.textContent = label
+  setIcon(button, icon)
   return button
 }
 
-const createToolbar = (className: string) => {
+const createToolbar = (className: string, specs: CommandSpec[]) => {
   const element = document.createElement('div')
   element.className = className
+  element.setAttribute('role', 'toolbar')
   element.setAttribute('aria-label', 'Formatting toolbar')
-  for (const [label, title, command] of commands) {
-    element.append(createButton(label, title, command))
+  let previousGroup: CommandSpec['group'] | undefined
+  for (const spec of specs) {
+    if (previousGroup && previousGroup !== spec.group) {
+      const separator = document.createElement('span')
+      separator.className = 'rich-content-separator'
+      separator.setAttribute('aria-hidden', 'true')
+      element.append(separator)
+    }
+    element.append(createButton(spec.icon, spec.title, spec.command))
+    previousGroup = spec.group
   }
   return element
 }
 
-const floatingToolbar = createToolbar('rich-content-toolbar')
+const floatingCommands = commands.filter(({ group }) => group === 'text')
+const floatingToolbar = createToolbar('rich-content-toolbar', floatingCommands)
 const persistentToolbar = createToolbar(
   'rich-content-toolbar rich-content-toolbar--persistent',
+  commands,
 )
 const toolbars = [floatingToolbar, persistentToolbar]
 
 const createTableButton = (
-  label: string,
+  icon: IconName,
   title: string,
   command: TableCommand,
 ) => {
@@ -186,8 +217,9 @@ const createTableButton = (
   button.className = 'rich-content-button table-content-button'
   button.dataset.tableCommand = command
   button.title = title
+  button.dataset.tooltip = title
   button.setAttribute('aria-label', title)
-  button.textContent = label
+  setIcon(button, icon)
   return button
 }
 
@@ -195,12 +227,12 @@ const tableToolbar = document.createElement('div')
 tableToolbar.className = 'rich-content-toolbar table-content-toolbar'
 tableToolbar.setAttribute('aria-label', 'Table toolbar')
 tableToolbar.append(
-  createTableButton('↑ Row', 'Insert row before', 'add-row-before'),
-  createTableButton('↓ Row', 'Insert row after', 'add-row-after'),
-  createTableButton('- Row', 'Delete row', 'delete-row'),
-  createTableButton('← Col', 'Insert column before', 'add-column-before'),
-  createTableButton('→ Col', 'Insert column after', 'add-column-after'),
-  createTableButton('- Col', 'Delete column', 'delete-column'),
+  createTableButton('row-before', 'Insert row before', 'add-row-before'),
+  createTableButton('row-after', 'Insert row after', 'add-row-after'),
+  createTableButton('row-delete', 'Delete row', 'delete-row'),
+  createTableButton('column-before', 'Insert column before', 'add-column-before'),
+  createTableButton('column-after', 'Insert column after', 'add-column-after'),
+  createTableButton('column-delete', 'Delete column', 'delete-column'),
 )
 
 const provider = new TooltipProvider({
@@ -210,13 +242,6 @@ const provider = new TooltipProvider({
     const { selection } = view.state
     return !selection.empty && view.hasFocus() && view.editable
   },
-})
-
-const tableProvider = new TooltipProvider({
-  content: tableToolbar,
-  offset: 10,
-  shouldShow: (view) =>
-    view.hasFocus() && view.editable && isInTable(view.state),
 })
 
 const applyMark = (view: EditorView, markName: string) => {
@@ -402,25 +427,6 @@ const showFormulaChoice = (view: EditorView, anchor: HTMLElement) => {
   }
 }
 
-const applyDiagram = (view: EditorView) => {
-  const codeBlock = view.state.schema.nodes.code_block
-  if (!codeBlock) return false
-
-  try {
-    const node = codeBlock.create({ language: 'mermaid' })
-    const { $from } = view.state.selection
-    const insertPosition =
-      $from.depth > 0 ? $from.after(1) : view.state.doc.content.size
-    const transaction = view.state.tr.insert(insertPosition, node)
-    if (!transaction.docChanged) return false
-    view.dispatch(transaction)
-    return true
-  } catch (error) {
-    console.error('Could not insert Mermaid diagram.', error)
-    return false
-  }
-}
-
 const applyCommand = async (view: EditorView, command: Command) => {
   if (command === 'undo') return undo(view.state, view.dispatch)
   if (command === 'redo') return redo(view.state, view.dispatch)
@@ -428,7 +434,7 @@ const applyCommand = async (view: EditorView, command: Command) => {
   if (command === 'link') return applyLink(view)
   if (command === 'formula') return applyFormula(view)
   if (command === 'table') return applyTable(view)
-  if (command === 'diagram') return applyDiagram(view)
+  if (command === 'diagram') return await diagramCommandHandler?.(view) ?? false
   if (command === 'heading1' || command === 'heading2') {
     const heading = view.state.schema.nodes.heading
     if (!heading) return false
@@ -587,6 +593,56 @@ export const tableContentConfig = (ctx: Ctx) => {
   ctx.set(tableTooltip.key, {
     view: (view: EditorView) => {
       const onMouseDown = (event: MouseEvent) => event.preventDefault()
+      let positionFrame = 0
+
+      const elementForNode = (node: Node | null | undefined) =>
+        node instanceof Element
+          ? node
+          : node?.parentNode instanceof Element
+            ? node.parentNode
+            : undefined
+
+      const positionToolbar = () => {
+        positionFrame = 0
+        if (!view.editable || !view.hasFocus()) {
+          tableToolbar.dataset.show = 'false'
+          return
+        }
+
+        const browserSelectionElement = elementForNode(
+          document.getSelection()?.anchorNode,
+        )
+        const browserSelectionCell = browserSelectionElement
+          ?.closest<HTMLElement>('td, th')
+        const domAtSelection = view.domAtPos(view.state.selection.from).node
+        const stateSelectionCell = elementForNode(domAtSelection)
+          ?.closest<HTMLElement>('td, th')
+        const cell = browserSelectionCell && view.dom.contains(browserSelectionCell)
+          ? browserSelectionCell
+          : stateSelectionCell
+        if (!cell || (!isInTable(view.state) && !browserSelectionCell)) {
+          tableToolbar.dataset.show = 'false'
+          return
+        }
+
+        tableToolbar.dataset.show = 'true'
+        const cellBounds = cell.getBoundingClientRect()
+        const toolbarBounds = tableToolbar.getBoundingClientRect()
+        const left = Math.min(
+          window.innerWidth - toolbarBounds.width - 8,
+          Math.max(8, cellBounds.left + (cellBounds.width - toolbarBounds.width) / 2),
+        )
+        const spaceAbove = cellBounds.top - toolbarBounds.height - 8
+        const top = spaceAbove >= 8 ? spaceAbove : cellBounds.bottom + 8
+        tableToolbar.style.left = `${Math.round(left)}px`
+        tableToolbar.style.top = `${Math.round(top)}px`
+      }
+
+      const schedulePosition = () => {
+        if (positionFrame) return
+        positionFrame = window.requestAnimationFrame(positionToolbar)
+      }
+
       const onClick = (event: MouseEvent) => {
         const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
           '[data-table-command]',
@@ -597,20 +653,36 @@ export const tableContentConfig = (ctx: Ctx) => {
         event.preventDefault()
         applyTableCommand(view, command)
         view.focus()
+        schedulePosition()
       }
 
+      tableToolbar.dataset.show = 'false'
+      tableToolbar.style.position = 'fixed'
+      document.body.append(tableToolbar)
       tableToolbar.addEventListener('mousedown', onMouseDown)
       tableToolbar.addEventListener('click', onClick)
-      tableProvider.update(view)
+      view.dom.addEventListener('pointerup', schedulePosition)
+      view.dom.addEventListener('keyup', schedulePosition)
+      view.dom.addEventListener('focusin', schedulePosition)
+      view.dom.addEventListener('focusout', schedulePosition)
+      document.addEventListener('selectionchange', schedulePosition)
+      window.addEventListener('resize', schedulePosition)
+      window.addEventListener('scroll', schedulePosition, true)
+      schedulePosition()
 
       return {
-        update: (updatedView, previousState) => {
-          tableProvider.update(updatedView, previousState)
-        },
+        update: schedulePosition,
         destroy: () => {
+          if (positionFrame) window.cancelAnimationFrame(positionFrame)
           tableToolbar.removeEventListener('mousedown', onMouseDown)
           tableToolbar.removeEventListener('click', onClick)
-          tableProvider.destroy()
+          view.dom.removeEventListener('pointerup', schedulePosition)
+          view.dom.removeEventListener('keyup', schedulePosition)
+          view.dom.removeEventListener('focusin', schedulePosition)
+          view.dom.removeEventListener('focusout', schedulePosition)
+          document.removeEventListener('selectionchange', schedulePosition)
+          window.removeEventListener('resize', schedulePosition)
+          window.removeEventListener('scroll', schedulePosition, true)
           tableToolbar.remove()
         },
       }
