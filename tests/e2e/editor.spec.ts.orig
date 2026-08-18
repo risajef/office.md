@@ -1,0 +1,546 @@
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import {
+  expect,
+  test as base,
+  type APIRequestContext,
+  type Page,
+} from '@playwright/test'
+
+const documentMarkdown = `# Project document
+
+This document is stored on disk.
+
+| Name | Value |
+| --- | --- |
+| Alpha | 1 |
+| Beta | 2 |
+
+![[included.md]]
+
+\`\`\`mermaid(data.csv)
+flowchart LR
+  A2 --> B2
+  A3 --> B3
+\`\`\`
+
+---
+
+## Second page
+
+Content after a forced page break.
+`
+
+const includedMarkdown = `## Included section
+
+This content comes from another file.
+`
+
+const csvSource = `month,Visitors,Signups,Total
+Jan,120,22,=B2+C2
+Feb,148,28,=B3+C3
+Mar,176,35,=B4+C4
+`
+
+const themeCss = `:root {
+  --page-bg: rgb(31, 32, 33);
+  --paper: rgb(245, 246, 247);
+  --document-font: "Courier New", monospace;
+  --heading-font: "Courier New", monospace;
+  --diagram-font: "Courier New", monospace;
+}
+
+body { background: rgb(31, 32, 33); }
+#editor .ProseMirror { font-family: var(--document-font); }
+`
+
+type Workspace = {
+  directory: string
+  file: (name: string) => string
+}
+
+const seedWorkspace = async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'office-md-e2e-'))
+  await writeFile(path.join(directory, 'document.md'), documentMarkdown)
+  await writeFile(path.join(directory, 'included.md'), includedMarkdown)
+  await writeFile(path.join(directory, 'data.csv'), csvSource)
+  await writeFile(path.join(directory, 'theme.css'), themeCss)
+  return {
+    directory,
+    file: (name: string) => path.join(directory, name),
+  }
+}
+
+const waitForEditor = async (page: Page) => {
+  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#document-name')).not.toHaveText('untitled.md', {
+    timeout: 20_000,
+  })
+}
+
+const openWorkspace = async (page: Page, directory: string) => {
+  await page.goto('/')
+  await page.evaluate(() => window.localStorage.clear())
+  await page.reload()
+  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 20_000 })
+
+  await page.locator('#open-folder').click()
+  const dialog = page.locator('.folder-picker-dialog')
+  await expect(dialog).toBeVisible()
+  const pathInput = dialog.getByLabel('Folder path')
+  await expect(pathInput).toBeEnabled()
+  await pathInput.fill(directory)
+  await pathInput.press('Enter')
+  await expect(pathInput).toHaveValue(directory)
+  const openButton = dialog.getByRole('button', { name: 'Open this folder' })
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
+
+  await expect(page.locator('#folder-status')).toContainText('disk-backed')
+  await expect(page.locator('#document-name')).toHaveText('document.md')
+  await expect(page.locator('#debug-markdown-content')).toHaveValue(
+    /Project document/,
+  )
+}
+
+const editMarkdownSource = async (page: Page, markdown: string) => {
+  const source = page.locator('#debug-markdown-content')
+  await source.fill(markdown)
+  await source.press('Control+Enter')
+  await expect(source).toHaveValue(`${markdown.trimEnd()}\n`)
+}
+
+const storeMarkdown = (page: Page) => page.locator(
+  '.editor-card [data-project-action="store"]',
+).click()
+
+const test = base.extend<{ workspace: Workspace }>({
+  workspace: [async ({ page }, use) => {
+    const workspace = await seedWorkspace()
+    await openWorkspace(page, workspace.directory)
+    try {
+      await use(workspace)
+    } finally {
+      await rm(workspace.directory, { recursive: true, force: true })
+    }
+  }, { auto: true }],
+})
+
+base.describe('local filesystem bridge', () => {
+  let workspace: Workspace
+
+  base.beforeEach(async () => {
+    workspace = await seedWorkspace()
+    await mkdir(workspace.file('node_modules'))
+    await writeFile(workspace.file('node_modules/ignored.md'), 'ignored')
+    await writeFile(workspace.file('image.png'), 'not really an image')
+  })
+
+  base.afterEach(async () => {
+    await rm(workspace.directory, { recursive: true, force: true })
+  })
+
+  const openThroughApi = async (
+    request: APIRequestContext,
+    inputPath: string,
+  ) => {
+    const response = await request.post('/__office_md_fs/open', {
+      data: { path: inputPath },
+    })
+    expect(response.ok()).toBe(true)
+    return response.json() as Promise<{
+      workspace: { id: string; path: string }
+      files: Array<{ name: string; markdown: string }>
+    }>
+  }
+
+  base('opens WSL paths and performs real write, rename, and reload effects', async ({
+    request,
+  }) => {
+    const windowsPath = `\\\\wsl$\\Ubuntu${workspace.directory.replaceAll('/', '\\')}`
+    const snapshot = await openThroughApi(request, windowsPath)
+    expect(snapshot.workspace.path).toBe(workspace.directory)
+    expect(snapshot.files.map((file) => file.name)).toEqual([
+      'data.csv',
+      'document.md',
+      'included.md',
+      'theme.css',
+    ])
+
+    const write = await request.post('/__office_md_fs/write', {
+      data: {
+        workspaceId: snapshot.workspace.id,
+        name: 'notes/new.md',
+        markdown: '# Written through the bridge',
+      },
+    })
+    expect(write.ok()).toBe(true)
+    expect(await readFile(workspace.file('notes/new.md'), 'utf8')).toBe(
+      '# Written through the bridge',
+    )
+
+    const rename = await request.post('/__office_md_fs/rename', {
+      data: {
+        workspaceId: snapshot.workspace.id,
+        oldName: 'notes/new.md',
+        newName: 'archive/renamed.md',
+      },
+    })
+    expect(rename.ok()).toBe(true)
+    await expect(access(workspace.file('notes/new.md'))).rejects.toThrow()
+    expect(await readFile(workspace.file('archive/renamed.md'), 'utf8')).toBe(
+      '# Written through the bridge',
+    )
+
+    const reload = await request.post('/__office_md_fs/reload', {
+      data: { workspaceId: snapshot.workspace.id },
+    })
+    expect(reload.ok()).toBe(true)
+    const reloaded = await reload.json() as { files: Array<{ name: string }> }
+    expect(reloaded.files.map((file) => file.name)).toContain('archive/renamed.md')
+    expect(reloaded.files.map((file) => file.name)).not.toContain('image.png')
+    expect(reloaded.files.map((file) => file.name)).not.toContain(
+      'node_modules/ignored.md',
+    )
+  })
+
+  base('rejects overwrite and path escape attempts without damaging files', async ({
+    request,
+  }) => {
+    await writeFile(workspace.file('existing.md'), 'destination')
+    const snapshot = await openThroughApi(request, workspace.directory)
+
+    const collision = await request.post('/__office_md_fs/rename', {
+      data: {
+        workspaceId: snapshot.workspace.id,
+        oldName: 'document.md',
+        newName: 'existing.md',
+      },
+    })
+    expect(collision.status()).toBe(400)
+    expect(await readFile(workspace.file('document.md'), 'utf8')).toBe(documentMarkdown)
+    expect(await readFile(workspace.file('existing.md'), 'utf8')).toBe('destination')
+
+    const escape = await request.post('/__office_md_fs/write', {
+      data: {
+        workspaceId: snapshot.workspace.id,
+        name: '../outside.md',
+        markdown: 'outside',
+      },
+    })
+    expect(escape.status()).toBe(400)
+  })
+})
+
+test.describe('disk-backed editor workflows', () => {
+  test('does not autosave to disk, then Store writes and Reload rereads disk', async ({
+    page,
+    workspace,
+  }) => {
+    const changed = '# Edited locally\n\nThis should not reach disk until Store.'
+    await page.evaluate(() => {
+      const editor = document.querySelector('.milkdown')
+      ;(window as typeof window & { __editorWasRemoved?: boolean }).__editorWasRemoved = false
+      new MutationObserver((records) => {
+        if (records.some((record) => [...record.removedNodes].includes(editor as Node))) {
+          ;(window as typeof window & { __editorWasRemoved?: boolean }).__editorWasRemoved = true
+        }
+      }).observe(document.body, { childList: true, subtree: true })
+    })
+    await editMarkdownSource(page, changed)
+    await page.waitForTimeout(500)
+    expect(await readFile(workspace.file('document.md'), 'utf8')).toBe(documentMarkdown)
+    expect(await page.evaluate(() => (
+      window as typeof window & { __editorWasRemoved?: boolean }
+    ).__editorWasRemoved)).toBe(false)
+
+    await storeMarkdown(page)
+    await expect.poll(() => readFile(workspace.file('document.md'), 'utf8')).toBe(changed)
+
+    const external = '# Changed on disk\n\nReloaded content.'
+    await writeFile(workspace.file('document.md'), external)
+    await page.locator('.editor-card [data-project-action="reload"]').click()
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(external)
+    await expect(page.locator('.ProseMirror')).toContainText('Changed on disk')
+  })
+
+  test('renames the active file on disk and creates new disk files', async ({
+    page,
+    workspace,
+  }) => {
+    await page.locator('#rename-document').click()
+    await page.locator('#source-dialog-input').fill('renamed.md')
+    await page.locator('#source-dialog-submit').click()
+    await expect(page.locator('#document-name')).toHaveText('renamed.md')
+    await expect(access(workspace.file('document.md'))).rejects.toThrow()
+    expect(await readFile(workspace.file('renamed.md'), 'utf8')).toBe(documentMarkdown)
+
+    await page.locator('.editor-card [data-project-action="reload"]').click()
+    await expect(page.locator('#document-name')).toHaveText('renamed.md')
+
+    await page.locator('#new-file').click()
+    await page.locator('#source-dialog-input').fill('new-notes')
+    await page.locator('#source-dialog-submit').click()
+    await expect(page.locator('#document-name')).toHaveText('new-notes.md')
+    await expect.poll(() => readFile(workspace.file('new-notes.md'), 'utf8')).toContain(
+      '# new-notes',
+    )
+
+    await editMarkdownSource(page, '# New notes\n\nStored content.')
+    await storeMarkdown(page)
+    await expect.poll(() => readFile(workspace.file('new-notes.md'), 'utf8')).toContain(
+      'Stored content.',
+    )
+  })
+
+  test('edits formulas and rows, stores source CSV, exports evaluated CSV, and renames it', async ({
+    page,
+    workspace,
+  }) => {
+    await page.locator('[title="Open data.csv"]').click()
+    await expect(page.locator('#csv-editor-card')).toBeVisible()
+    await expect(page.locator('#document-outline')).toContainText('No outline for CSV files')
+    await expect(page.locator('#rename-csv-document')).toBeEnabled()
+
+    const formula = await page.evaluate(() => {
+      const sheet = (document.querySelector('.jss_container') as HTMLElement & {
+        jssWorksheet?: {
+          setValue: (cell: string, value: string) => void
+          getValue: (cell: string, processed?: boolean) => unknown
+        }
+      })?.jssWorksheet
+      sheet?.setValue('D3', '=B3*C3')
+      return {
+        raw: sheet?.getValue('D3'),
+        processed: sheet?.getValue('D3', true),
+      }
+    })
+    expect(formula.raw).toBe('=B3*C3')
+    expect(String(formula.processed)).toBe('4144')
+    expect(await readFile(workspace.file('data.csv'), 'utf8')).toBe(csvSource)
+
+    await page.locator('.csv-editor-card [data-project-action="store"]').click()
+    await expect.poll(() => readFile(workspace.file('data.csv'), 'utf8')).toContain(
+      '=B3*C3',
+    )
+
+    const downloadPromise = page.waitForEvent('download')
+    await page.locator('.csv-editor-card [data-file-export]').click()
+    const download = await downloadPromise
+    const downloadedPath = await download.path()
+    expect(download.suggestedFilename()).toBe('data.csv')
+    expect(await readFile(downloadedPath as string, 'utf8')).toContain('4144')
+    expect(await readFile(downloadedPath as string, 'utf8')).not.toContain('=B3*C3')
+
+    const rowCountBefore = await page.locator(
+      '#csv-spreadsheet tbody tr',
+    ).count()
+    const cell = page.locator('#csv-spreadsheet td[data-x="1"][data-y="1"]')
+    await cell.click()
+    await cell.click({ button: 'right' })
+    const insertRow = page.getByRole('button', {
+      name: 'Insert a blank row after the selected row',
+    })
+    await expect(insertRow).toBeVisible()
+    await insertRow.click()
+    await expect(page.locator('#csv-spreadsheet tbody tr')).toHaveCount(
+      rowCountBefore + 1,
+    )
+
+    await page.locator('#rename-csv-document').click()
+    await page.locator('#source-dialog-input').fill('renamed-data.csv')
+    await page.locator('#source-dialog-submit').click()
+    await expect(page.locator('#csv-editor-name')).toHaveText('renamed-data.csv')
+    await expect(access(workspace.file('data.csv'))).rejects.toThrow()
+    await expect(access(workspace.file('renamed-data.csv'))).resolves.toBeUndefined()
+  })
+})
+
+test.describe('rich document behavior', () => {
+  test('renders and removes includes, and table toolbar actions mutate the table', async ({
+    page,
+  }) => {
+    const include = page.locator('.markdown-include')
+    await expect(include).toContainText('Included section')
+    await expect(include).toContainText('This content comes from another file.')
+
+    await include.locator('.markdown-include-remove').click()
+    await expect(page.locator('.markdown-include')).toHaveCount(0)
+    await expect(page.locator('#debug-markdown-content')).not.toHaveValue(
+      /!\[\[included\.md\]\]/,
+    )
+
+    const rows = page.locator('.ProseMirror table tr')
+    const before = await rows.count()
+    await page.locator('.ProseMirror table td').first().click()
+    const addRow = page.locator(
+      '.table-content-toolbar [data-table-command="add-row-after"]',
+    )
+    await expect(addRow).toBeVisible()
+    await addRow.click()
+    await expect(rows).toHaveCount(before + 1)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(/Alpha/)
+  })
+
+  test('renders CSV-backed Mermaid, applies scoped CSS and Mermaid typography', async ({
+    page,
+  }) => {
+    const preview = page.locator('.mermaid-preview').first()
+    await expect(preview.locator('svg')).toBeVisible({ timeout: 20_000 })
+    await expect(preview).toContainText('Jan')
+    await expect(preview).toContainText('120')
+
+    const bodyBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+    await page.locator('[title="Apply theme.css"]').click()
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+      bodyBackground,
+    )
+    expect(await page.evaluate(() => getComputedStyle(
+      document.querySelector('.editor-wrap') as HTMLElement,
+    ).backgroundColor)).toBe('rgb(31, 32, 33)')
+    expect(await page.evaluate(() => getComputedStyle(
+      document.querySelector('.ProseMirror') as HTMLElement,
+    ).fontFamily)).toContain('Courier New')
+    expect(await preview.locator('svg text').first().evaluate(
+      (element) => getComputedStyle(element).fontFamily,
+    )).toContain('Courier New')
+
+    const selectors = await page.evaluate(() => {
+      const style = document.querySelector<HTMLStyleElement>(
+        'style[data-workspace-theme]',
+      )
+      return style
+        ? [...(style.sheet?.cssRules ?? [])]
+          .filter((rule): rule is CSSStyleRule => rule.type === CSSRule.STYLE_RULE)
+          .map((rule) => rule.selectorText)
+        : []
+    })
+    expect(selectors.every((selector) => selector.startsWith('.editor-wrap'))).toBe(true)
+
+    const cssRow = page.locator('.file-row[data-file-kind="css"]', {
+      hasText: 'theme.css',
+    })
+    await expect(cssRow.locator('[data-icon="include"]')).toHaveCount(0)
+    const csvRow = page.locator('.file-row[data-file-kind="csv"]', {
+      hasText: 'data.csv',
+    })
+    await expect(csvRow.locator('[data-icon="include"]')).toHaveCount(1)
+  })
+
+  test('inserts ordinary and CSV-linked Mermaid and persists source edits', async ({
+    page,
+  }) => {
+    const diagrams = page.locator('.mermaid-block')
+    const originalCount = await diagrams.count()
+    const diagramButton = page.locator(
+      '.rich-content-toolbar--persistent [data-command="diagram"]',
+    )
+
+    await diagramButton.click()
+    await page.locator('.choice-dialog-option', { hasText: 'Blank Mermaid' }).click()
+    await page.locator('#source-dialog-input').fill('flowchart LR\n  Start --> Finish')
+    await page.locator('#source-dialog-submit').click()
+    await expect(diagrams).toHaveCount(originalCount + 1)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /```mermaid\nflowchart LR/,
+    )
+
+    await diagramButton.click()
+    await page.locator('.choice-dialog-option', { hasText: 'data.csv' }).click()
+    await page.locator('#source-dialog-input').fill('flowchart LR\n  A2 --> B2')
+    await page.locator('#source-dialog-submit').click()
+    await expect(diagrams).toHaveCount(originalCount + 2)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /```mermaid\(data\.csv\)/,
+    )
+
+    const newest = page.locator('.mermaid-preview').last()
+    await expect(newest.locator('svg')).toBeVisible({ timeout: 20_000 })
+    await newest.click()
+    const sourceEditor = page.locator('.mermaid-source-editor')
+    await sourceEditor.fill('flowchart LR\n  A2 --> C2')
+    await sourceEditor.press('Control+Enter')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(/A2 --> C2/)
+  })
+
+  test('page settings drive layout and HTML/portable exports contain materialized output', async ({
+    page,
+  }) => {
+    await expect(page.locator('.page-layout-gap[data-page-break="forced"]')).toHaveCount(1, {
+      timeout: 20_000,
+    })
+    await expect(page.locator('#page-count')).toContainText('2 pages')
+
+    await page.locator('#page-format').selectOption('a4-landscape')
+    await expect.poll(() => page.locator('.ProseMirror').evaluate(
+      (element) => getComputedStyle(element).getPropertyValue('--page-width').trim(),
+    )).toBe('1123px')
+    await expect.poll(() => page.locator('.ProseMirror').evaluate(
+      (element) => getComputedStyle(element).getPropertyValue('--page-height').trim(),
+    )).toBe('794px')
+
+    await page.locator('#layout-mode').selectOption('presentation')
+    await page.locator('#page-format').selectOption('a4-portrait')
+    await expect(page.locator('.ProseMirror')).toHaveAttribute(
+      'data-page-mode',
+      'presentation',
+    )
+    await expect.poll(() => page.locator('.ProseMirror').evaluate(
+      (element) => getComputedStyle(element).getPropertyValue('--page-height').trim(),
+    )).toBe('1123px')
+
+    await page.locator('#layout-mode').selectOption('document')
+    const htmlDownloadPromise = page.waitForEvent('download')
+    await page.locator('.editor-card [data-file-export]').click()
+    await page.locator('.choice-dialog-option', { hasText: 'HTML' }).click()
+    const htmlDownload = await htmlDownloadPromise
+    const html = await readFile(await htmlDownload.path() as string, 'utf8')
+    expect(html.match(/class="export-page"/g)).toHaveLength(2)
+    expect(html).toContain('@page')
+    expect(html).toContain('Included content')
+    expect(html).not.toContain('markdown-include-header')
+
+    const markdownDownloadPromise = page.waitForEvent('download')
+    await page.locator('.editor-card [data-file-export]').click()
+    await page.locator('.choice-dialog-option', { hasText: 'Portable Markdown' }).click()
+    const markdownDownload = await markdownDownloadPromise
+    const portable = await readFile(await markdownDownload.path() as string, 'utf8')
+    expect(portable).toContain('This content comes from another file.')
+    expect(portable).not.toContain('![[included.md]]')
+    expect(portable).toContain('A2["Jan"] --> B2["120"]')
+    expect(portable).not.toContain('mermaid(data.csv)')
+  })
+
+  test('debug source collapses, rerenders edits, and compact toolbars do not overflow', async ({
+    page,
+  }) => {
+    const debug = page.locator('#debug-markdown-view')
+    await debug.locator('summary').click()
+    await expect(debug).not.toHaveAttribute('open', '')
+    await debug.locator('summary').click()
+    await expect(debug).toHaveAttribute('open', '')
+
+    await editMarkdownSource(page, '# Re-rendered from source\n\nNew body.')
+    await expect(page.locator('.ProseMirror h1')).toHaveText('Re-rendered from source')
+
+    await page.setViewportSize({ width: 760, height: 900 })
+    const dimensions = await page.evaluate(() => {
+      const top = document.querySelector('.editor-toolbar') as HTMLElement
+      const rich = document.querySelector(
+        '.rich-content-toolbar--persistent',
+      ) as HTMLElement
+      return {
+        top: [top.clientWidth, top.scrollWidth],
+        rich: [rich.clientWidth, rich.scrollWidth],
+        sigma: document.querySelector(
+          '[data-command="formula"] path',
+        )?.getAttribute('d'),
+      }
+    })
+    expect(dimensions.top[1]).toBeLessThanOrEqual(dimensions.top[0])
+    expect(dimensions.rich[1]).toBeLessThanOrEqual(dimensions.rich[0])
+    expect(dimensions.sigma).toBe('M17 5H8l5 7-5 7h9')
+    await expect(page.locator('#rename-document')).toBeEnabled()
+  })
+})
