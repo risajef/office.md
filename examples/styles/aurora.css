@@ -9,6 +9,17 @@
   --document-font: "Avenir Next", Avenir, "Segoe UI", sans-serif;
   --heading-font: Optima, Candara, "Segoe UI", sans-serif;
   --code-font: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --code-background: #f0f8f6;
+  --code-border: #c8e3de;
+  --code-text: #173c3a;
+  --code-comment: #63807c;
+  --code-punctuation: #436662;
+  --code-literal: #b13f69;
+  --code-string: #14775e;
+  --code-operator: #9a601a;
+  --code-keyword: #6b4bb6;
+  --code-function: #08738a;
+  --code-variable: #a05e1b;
   --diagram-font: var(--heading-font);
 }
 

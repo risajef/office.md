@@ -104,6 +104,17 @@ Open a `.css` file from the Files panel to apply it. Selectors are scoped to `.e
   --document-font: Georgia, serif;
   --heading-font: "Trebuchet MS", sans-serif;
   --code-font: "Cascadia Mono", monospace;
+  --code-background: #f6f5f0;
+  --code-border: #dfddd4;
+  --code-text: #24231f;
+  --code-comment: #77766f;
+  --code-punctuation: #55534d;
+  --code-literal: #a83a64;
+  --code-string: #2f7a4b;
+  --code-operator: #9a5c13;
+  --code-keyword: #5b50c7;
+  --code-function: #247493;
+  --code-variable: #9a5c13;
   --diagram-font: var(--heading-font);
 }
 ```

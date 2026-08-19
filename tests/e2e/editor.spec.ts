@@ -12,12 +12,18 @@ const documentMarkdown = `# Project document
 
 This document is stored on disk.
 
+[asdf qwer](https://example.com)
+
 | Name | Value |
 | --- | --- |
 | Alpha | 1 |
 | Beta | 2 |
 
 ![[included.md]]
+
+\`\`\`javascript
+const themed = true
+\`\`\`
 
 \`\`\`mermaid(data.csv)
 flowchart LR
@@ -46,6 +52,7 @@ Mar,176,35,=B4+C4
 const themeCss = `:root {
   --page-bg: rgb(31, 32, 33);
   --paper: rgb(245, 246, 247);
+  --code-background: rgb(20, 30, 40);
   --document-font: "Courier New", monospace;
   --heading-font: "Courier New", monospace;
   --diagram-font: "Courier New", monospace;
@@ -392,6 +399,145 @@ test.describe('disk-backed editor workflows', () => {
 })
 
 test.describe('rich document behavior', () => {
+  test('keeps document toolbars visible while scrolling', async ({ page }) => {
+    const toolbarStack = page.locator('.editor-toolbar-stack')
+    await expect(toolbarStack).toBeVisible()
+    await expect.poll(() => toolbarStack.evaluate(
+      (element) => getComputedStyle(element).position,
+    )).toBe('sticky')
+
+    await page.evaluate(() => window.scrollTo({ top: 900, behavior: 'instant' }))
+    await expect.poll(() => toolbarStack.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().top),
+    )).toBe(0)
+    await expect(page.locator('#layout-mode')).toBeVisible()
+    await expect(page.locator(
+      '.rich-content-toolbar--persistent [data-command="formula"]',
+    )).toBeVisible()
+  })
+
+  test('creates and toggles Markdown checklist items', async ({ page }) => {
+    const paragraph = page.locator('.ProseMirror p', {
+      hasText: 'This document is stored on disk.',
+    })
+    const checklistButton = page.locator(
+      '.rich-content-toolbar--persistent [data-command="task_list"]',
+    )
+    await paragraph.click()
+    await checklistButton.click()
+
+    const checkbox = page.locator(
+      '.ProseMirror li[data-item-type="task"] input[type="checkbox"]',
+    )
+    await expect(checkbox).toBeVisible()
+    await expect(checkbox).not.toBeChecked()
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /\* \[ \] This document is stored on disk\./,
+    )
+
+    await checkbox.click()
+    await expect(checkbox).toBeChecked()
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /\* \[x\] This document is stored on disk\./,
+    )
+  })
+
+  test('opens a link in a new tab on Ctrl+click', async ({ page }) => {
+    await page.evaluate(() => {
+      const state = window as typeof window & { openedLink?: string[] }
+      window.open = ((url?: string | URL, target?: string, features?: string) => {
+        state.openedLink = [String(url), target ?? '', features ?? '']
+        return null
+      }) as typeof window.open
+    })
+
+    const link = page.locator('.ProseMirror a', { hasText: 'asdf qwer' })
+    await link.hover()
+    await expect.poll(() => link.evaluate(
+      (element) => getComputedStyle(element).cursor,
+    )).toBe('text')
+    await page.keyboard.down('Control')
+    await expect.poll(() => link.evaluate(
+      (element) => getComputedStyle(element).cursor,
+    )).toBe('pointer')
+    await page.keyboard.up('Control')
+    await expect.poll(() => link.evaluate(
+      (element) => getComputedStyle(element).cursor,
+    )).toBe('text')
+
+    await link.click({
+      modifiers: ['Control'],
+    })
+    await expect.poll(() => page.evaluate(() => (
+      window as typeof window & { openedLink?: string[] }
+    ).openedLink)).toEqual([
+      'https://example.com',
+      '_blank',
+      'noopener,noreferrer',
+    ])
+    await expect(page.locator('#source-dialog')).toBeHidden()
+  })
+
+  test('removes a link from only the selected text and accepts an empty URL', async ({
+    page,
+  }) => {
+    const link = page.locator('.ProseMirror a', { hasText: 'asdf qwer' })
+    const linkButton = page.locator(
+      '.rich-content-toolbar--persistent [data-command="link"]',
+    )
+
+    await expect(link).toHaveAttribute('href', 'https://example.com')
+    await link.evaluate((element) => {
+      const text = element.firstChild
+      const editor = element.closest<HTMLElement>('.ProseMirror')
+      if (!text || !editor) throw new Error('Could not select the link text.')
+      editor.focus()
+      const range = document.createRange()
+      range.setStart(text, 0)
+      range.setEnd(text, 4)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    await expect(linkButton).toHaveAttribute('aria-pressed', 'true')
+
+    await linkButton.click()
+    await expect(page.locator('#source-dialog-title')).toHaveText('Edit link')
+    const removeLink = page.locator('#source-dialog-remove')
+    await expect(removeLink).toBeVisible()
+    await expect(removeLink).toHaveText('Remove link')
+    await removeLink.click()
+
+    await expect(page.locator('.ProseMirror a')).toHaveText(' qwer')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /asdf \[qwer\]\(https:\/\/example\.com\)/,
+    )
+
+    const remainingLink = page.locator('.ProseMirror a')
+    await remainingLink.evaluate((element) => {
+      const text = element.firstChild
+      const editor = element.closest<HTMLElement>('.ProseMirror')
+      if (!text || !editor) throw new Error('Could not select the remaining link.')
+      editor.focus()
+      const range = document.createRange()
+      range.selectNodeContents(text)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    await expect(linkButton).toHaveAttribute('aria-pressed', 'true')
+
+    await linkButton.click()
+    await page.locator('#source-dialog-input').fill('')
+    await page.locator('#source-dialog-submit').click()
+    await expect(page.locator('.ProseMirror a')).toHaveCount(0)
+    await expect(page.locator('#debug-markdown-content')).not.toHaveValue(
+      /https:\/\/example\.com/,
+    )
+  })
+
   test('renders and removes includes, and table toolbar actions mutate the table', async ({
     page,
   }) => {
@@ -456,6 +602,9 @@ test.describe('rich document behavior', () => {
     expect(await page.evaluate(() => getComputedStyle(
       document.querySelector('.ProseMirror') as HTMLElement,
     ).fontFamily)).toContain('Courier New')
+    expect(await page.locator('.ProseMirror pre').first().evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    )).toBe('rgb(20, 30, 40)')
     expect(await preview.locator('svg .nodeLabel').first().evaluate(
       (element) => getComputedStyle(element).fontFamily,
     )).toContain('Courier New')
@@ -525,6 +674,24 @@ test.describe('rich document behavior', () => {
       timeout: 20_000,
     })
     await expect(page.locator('#page-count')).toContainText('2 pages')
+
+    await page.locator('#layout-mode').selectOption('continuous')
+    await expect(page.locator('#page-count')).toBeHidden()
+    await expect(page.locator('.ProseMirror')).toHaveAttribute(
+      'data-page-mode',
+      'continuous',
+    )
+    await expect(page.locator('.page-layout-gap')).toHaveCount(0)
+    await expect.poll(() => page.locator('.ProseMirror').evaluate(
+      (element) => element.style.getPropertyValue('--page-width'),
+    )).toBe('')
+
+    await page.locator('#layout-mode').selectOption('document')
+    await expect(page.locator('#page-count')).toBeVisible()
+    await expect(page.locator('.ProseMirror')).toHaveAttribute(
+      'data-page-mode',
+      'document',
+    )
 
     await page.locator('#page-format').selectOption('a4-landscape')
     await expect.poll(() => page.locator('.ProseMirror').evaluate(

@@ -1,5 +1,6 @@
 import type { Ctx } from '@milkdown/kit/ctx'
 import { getMarkRange } from '@milkdown/kit/prose'
+import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { redo, undo } from '@milkdown/kit/prose/history'
 import {
@@ -21,7 +22,9 @@ import {
   selectedRect,
 } from '@milkdown/kit/prose/tables'
 import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
+import { extendListItemSchemaForTask } from '@milkdown/kit/preset/gfm'
 import { TooltipProvider, tooltipFactory } from '@milkdown/plugin-tooltip'
+import { $view } from '@milkdown/kit/utils'
 import { mathInlineSchema } from './latex-plugin'
 import { setIcon, type IconName } from '../icons'
 
@@ -40,6 +43,7 @@ type Command =
   | 'heading1'
   | 'heading2'
   | 'bullet_list'
+  | 'task_list'
   | 'ordered_list'
   | 'blockquote'
   | 'table'
@@ -71,6 +75,7 @@ export type TextDialogOptions = {
   label: string
   value?: string
   submitLabel?: string
+  removeLabel?: string
   multiline?: boolean
 }
 
@@ -89,10 +94,11 @@ export const requestText = (
   const title = document.querySelector<HTMLElement>('#source-dialog-title')
   const label = document.querySelector<HTMLLabelElement>('#source-dialog-label')
   const input = document.querySelector<HTMLTextAreaElement>('#source-dialog-input')
+  const remove = document.querySelector<HTMLButtonElement>('#source-dialog-remove')
   const cancel = document.querySelector<HTMLButtonElement>('#source-dialog-cancel')
   const submit = document.querySelector<HTMLButtonElement>('#source-dialog-submit')
 
-  if (!dialog || !title || !label || !input || !cancel || !submit) {
+  if (!dialog || !title || !label || !input || !remove || !cancel || !submit) {
     return Promise.resolve(null)
   }
 
@@ -103,6 +109,7 @@ export const requestText = (
       if (settled) return
       settled = true
       dialog.hidden = true
+      remove.removeEventListener('click', onRemove)
       cancel.removeEventListener('click', onCancel)
       submit.removeEventListener('click', onSubmit)
       dialog.removeEventListener('pointerdown', onBackdropPointerDown)
@@ -111,6 +118,7 @@ export const requestText = (
       resolve(value)
     }
 
+    const onRemove = () => finish('')
     const onCancel = () => finish(null)
     const onSubmit = () => finish(input.value)
     const onBackdropPointerDown = (event: PointerEvent) => {
@@ -131,8 +139,11 @@ export const requestText = (
     label.textContent = options.label
     input.value = options.value ?? ''
     input.rows = options.multiline === false ? 1 : 8
+    remove.textContent = options.removeLabel ?? 'Remove'
+    remove.hidden = !options.removeLabel
     submit.textContent = options.submitLabel ?? 'Apply'
     dialog.hidden = false
+    remove.addEventListener('click', onRemove)
     cancel.addEventListener('click', onCancel)
     submit.addEventListener('click', onSubmit)
     dialog.addEventListener('pointerdown', onBackdropPointerDown)
@@ -160,6 +171,7 @@ const commands: CommandSpec[] = [
   { icon: 'heading-1', title: 'Heading 1', command: 'heading1', group: 'structure' },
   { icon: 'heading-2', title: 'Heading 2', command: 'heading2', group: 'structure' },
   { icon: 'list-bulleted', title: 'Bullet list', command: 'bullet_list', group: 'structure' },
+  { icon: 'list-check', title: 'Checklist', command: 'task_list', group: 'structure' },
   { icon: 'list-numbered', title: 'Numbered list', command: 'ordered_list', group: 'structure' },
   { icon: 'quote', title: 'Blockquote', command: 'blockquote', group: 'structure' },
   { icon: 'table', title: 'Insert table', command: 'table', group: 'insert' },
@@ -206,6 +218,63 @@ const persistentToolbar = createToolbar(
   commands,
 )
 const toolbars = [floatingToolbar, persistentToolbar]
+
+const taskListItemView = $view(
+  extendListItemSchemaForTask.node,
+  () => (initialNode, view, getPos) => {
+    let currentNode = initialNode
+    const dom = document.createElement('li')
+    const checkbox = document.createElement('input')
+    const contentDOM = document.createElement('div')
+    checkbox.type = 'checkbox'
+    checkbox.className = 'task-list-checkbox'
+    checkbox.contentEditable = 'false'
+    contentDOM.className = 'task-list-item-content'
+    dom.append(checkbox, contentDOM)
+
+    const render = (node: ProseNode) => {
+      const isTask = typeof node.attrs.checked === 'boolean'
+      dom.classList.toggle('task-list-item', isTask)
+      dom.toggleAttribute('data-item-type', isTask)
+      if (isTask) dom.dataset.itemType = 'task'
+      if (isTask) dom.dataset.checked = String(node.attrs.checked)
+      else delete dom.dataset.checked
+      checkbox.hidden = !isTask
+      checkbox.checked = node.attrs.checked === true
+      checkbox.setAttribute(
+        'aria-label',
+        checkbox.checked ? 'Mark task incomplete' : 'Mark task complete',
+      )
+    }
+
+    const onChange = () => {
+      const position = getPos?.()
+      if (typeof position !== 'number') return
+      const node = view.state.doc.nodeAt(position)
+      if (!node || node.type !== currentNode.type || node.attrs.checked == null) return
+      view.dispatch(view.state.tr.setNodeMarkup(position, undefined, {
+        ...node.attrs,
+        checked: checkbox.checked,
+      }))
+    }
+    checkbox.addEventListener('change', onChange)
+    render(initialNode)
+
+    return {
+      dom,
+      contentDOM,
+      update: (updatedNode) => {
+        if (updatedNode.type !== initialNode.type) return false
+        currentNode = updatedNode
+        render(updatedNode)
+        return true
+      },
+      stopEvent: (event) => checkbox.contains(event.target as globalThis.Node),
+      ignoreMutation: (mutation) => checkbox.contains(mutation.target),
+      destroy: () => checkbox.removeEventListener('change', onChange),
+    }
+  },
+)
 
 const createTableButton = (
   icon: IconName,
@@ -254,24 +323,37 @@ const applyLink = async (view: EditorView) => {
   const mark = view.state.schema.marks.link
   if (!mark) return false
 
-  const currentRange = getMarkRange(view.state.selection.$from, mark)
+  const { from, to, empty, $from } = view.state.selection
+  const currentRange = getMarkRange($from, mark)
   const currentHref = currentRange?.mark.attrs.href
-  const isEditing = Boolean(currentRange)
+  const hasSelectedLink = !empty && view.state.doc.rangeHasMark(from, to, mark)
+  const isEditing = Boolean(currentRange) || hasSelectedLink
 
   const href = await requestText({
     title: isEditing ? 'Edit link' : 'Add link',
     label: 'Link URL',
-    value: currentHref || 'https://',
+    value: currentHref || (isEditing ? '' : 'https://'),
     submitLabel: isEditing ? 'Update link' : 'Add link',
+    removeLabel: isEditing ? 'Remove link' : undefined,
     multiline: false,
   })
-  if (!href) return false
+  if (href === null) return false
 
-  if (currentRange) {
+  const targetFrom = empty && currentRange ? currentRange.from : from
+  const targetTo = empty && currentRange ? currentRange.to : to
+  if (!href.trim()) {
+    if (targetFrom === targetTo) return false
+    const transaction = view.state.tr.removeMark(targetFrom, targetTo, mark)
+    if (!transaction.docChanged) return false
+    view.dispatch(transaction)
+    return true
+  }
+
+  if (targetFrom !== targetTo) {
     const transaction = view.state.tr.addMark(
-      currentRange.from,
-      currentRange.to,
-      mark.create({ href, title: currentRange.mark.attrs.title ?? null }),
+      targetFrom,
+      targetTo,
+      mark.create({ href, title: currentRange?.mark.attrs.title ?? null }),
     )
     if (!transaction.docChanged) return false
     view.dispatch(transaction)
@@ -288,6 +370,65 @@ const applyBlockquote = (view: EditorView) => {
     return lift(view.state, view.dispatch)
   }
   return wrapIn(blockquote)(view.state, view.dispatch)
+}
+
+const listItemsInSelection = (view: EditorView) => {
+  const listItem = view.state.schema.nodes.list_item
+  if (!listItem) return []
+  const items: Array<{ node: ProseNode; position: number }> = []
+  const positions = new Set<number>()
+  const add = (node: ProseNode, position: number) => {
+    if (node.type !== listItem || positions.has(position)) return
+    positions.add(position)
+    items.push({ node, position })
+  }
+  const { $from, from, to, empty } = view.state.selection
+
+  if (empty) {
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth)
+      if (node.type === listItem) {
+        add(node, $from.before(depth))
+        break
+      }
+    }
+    return items
+  }
+
+  view.state.doc.nodesBetween(from, to, (node, position) => {
+    if (node.type !== listItem) return true
+    add(node, position)
+    return false
+  })
+  return items
+}
+
+const setTaskListItems = (
+  view: EditorView,
+  items: ReturnType<typeof listItemsInSelection>,
+  enabled: boolean,
+) => {
+  const transaction = view.state.tr
+  for (const { node, position } of items) {
+    const checked = enabled ? (node.attrs.checked ?? false) : null
+    if (node.attrs.checked === checked) continue
+    transaction.setNodeMarkup(position, undefined, { ...node.attrs, checked })
+  }
+  if (!transaction.docChanged) return false
+  view.dispatch(transaction)
+  return true
+}
+
+const applyTaskList = (view: EditorView) => {
+  let items = listItemsInSelection(view)
+  if (!items.length) {
+    const bulletList = view.state.schema.nodes.bullet_list
+    if (!bulletList || !wrapInList(bulletList)(view.state, view.dispatch)) return false
+    items = listItemsInSelection(view)
+  }
+  if (!items.length) return false
+  const enable = items.some(({ node }) => node.attrs.checked == null)
+  return setTaskListItems(view, items, enable)
 }
 
 const applyFormula = (view: EditorView) => {
@@ -431,6 +572,7 @@ const applyCommand = async (view: EditorView, command: Command) => {
   if (command === 'undo') return undo(view.state, view.dispatch)
   if (command === 'redo') return redo(view.state, view.dispatch)
   if (command === 'blockquote') return applyBlockquote(view)
+  if (command === 'task_list') return applyTaskList(view)
   if (command === 'link') return applyLink(view)
   if (command === 'formula') return applyFormula(view)
   if (command === 'table') return applyTable(view)
@@ -521,6 +663,10 @@ const syncActiveButtons = (view: EditorView) => {
               ? view.state.selection.$from.parent.attrs.level === 2
               : command === 'bullet_list'
                 ? hasAncestor(view, 'bullet_list')
+                : command === 'task_list'
+                  ? listItemsInSelection(view).some(
+                      ({ node }) => node.attrs.checked != null,
+                    )
                 : command === 'ordered_list'
                   ? hasAncestor(view, 'ordered_list')
                   : command === 'blockquote'
@@ -541,6 +687,29 @@ export const richContentConfig = (ctx: Ctx) => {
   ctx.set(richContentTooltip.key, {
     view: (view: EditorView) => {
       const onMouseDown = (event: MouseEvent) => event.preventDefault()
+      const setLinkOpenModifier = (active: boolean) => {
+        view.dom.classList.toggle('is-link-open-modifier', active)
+      }
+      const onLinkOpenModifierChange = (event: KeyboardEvent) => {
+        setLinkOpenModifier(event.ctrlKey || event.metaKey)
+      }
+      const onEditorPointerMove = (event: PointerEvent) => {
+        setLinkOpenModifier(event.ctrlKey || event.metaKey)
+      }
+      const clearLinkOpenModifier = () => setLinkOpenModifier(false)
+      const onEditorLinkClick = (event: MouseEvent) => {
+        if (event.button !== 0 || (!event.ctrlKey && !event.metaKey)) return
+        const target = event.target instanceof Element
+          ? event.target.closest<HTMLAnchorElement>('a[href]')
+          : undefined
+        if (!target || !view.dom.contains(target)) return
+        const href = target.getAttribute('href')?.trim()
+        if (!href) return
+
+        event.preventDefault()
+        event.stopPropagation()
+        window.open(href, '_blank', 'noopener,noreferrer')
+      }
       const onClick = (event: MouseEvent) => {
         const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
           '[data-command]',
@@ -566,7 +735,12 @@ export const richContentConfig = (ctx: Ctx) => {
         toolbar.addEventListener('mousedown', onMouseDown)
         toolbar.addEventListener('click', onClick)
       }
+      view.dom.addEventListener('click', onEditorLinkClick, true)
+      view.dom.addEventListener('pointermove', onEditorPointerMove)
       document.addEventListener('selectionchange', onSelectionChange)
+      window.addEventListener('keydown', onLinkOpenModifierChange)
+      window.addEventListener('keyup', onLinkOpenModifierChange)
+      window.addEventListener('blur', clearLinkOpenModifier)
       syncActiveButtons(view)
 
       return {
@@ -579,7 +753,13 @@ export const richContentConfig = (ctx: Ctx) => {
             toolbar.removeEventListener('mousedown', onMouseDown)
             toolbar.removeEventListener('click', onClick)
           }
+          view.dom.removeEventListener('click', onEditorLinkClick, true)
+          view.dom.removeEventListener('pointermove', onEditorPointerMove)
           document.removeEventListener('selectionchange', onSelectionChange)
+          window.removeEventListener('keydown', onLinkOpenModifierChange)
+          window.removeEventListener('keyup', onLinkOpenModifierChange)
+          window.removeEventListener('blur', clearLinkOpenModifier)
+          clearLinkOpenModifier()
           provider.destroy()
           floatingToolbar.remove()
           persistentToolbar.remove()
@@ -693,6 +873,7 @@ export const tableContentConfig = (ctx: Ctx) => {
 // A tooltip factory returns both the context slice and the ProseMirror
 // plugin. Registering the pair injects the spec used by richContentConfig.
 export const richContentPlugin = [
+  taskListItemView,
   richContentTooltip,
   richContentTooltipPlugin,
   tableTooltip,

@@ -25,6 +25,7 @@
 
           <div class="workspace-main">
             <section class="editor-card" aria-label="Markdown editor">
+          <div class="editor-toolbar-stack">
           <div class="editor-toolbar">
             <button
               class="document-name"
@@ -120,6 +121,7 @@
           </div>
 
           <div class="rich-toolbar-host" id="rich-toolbar" aria-label="Rich text formatting"></div>
+          </div>
 
           <div class="editor-wrap">
             <div id="editor"></div>
@@ -274,6 +276,7 @@
         <label id="source-dialog-label" for="source-dialog-input">Value</label>
         <textarea id="source-dialog-input" spellcheck="false"></textarea>
         <div class="source-dialog-actions">
+          <button class="dialog-danger" id="source-dialog-remove" type="button" hidden>Remove</button>
           <button class="dialog-secondary" id="source-dialog-cancel" type="button">Cancel</button>
           <button class="dialog-primary" id="source-dialog-submit" type="button">Apply</button>
         </div>

@@ -16,6 +16,17 @@
   --document-font: "Palatino Linotype", Palatino, Georgia, serif;
   --heading-font: "Avenir Next", Avenir, "Segoe UI", sans-serif;
   --code-font: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --code-background: #202029;
+  --code-border: #474754;
+  --code-text: #eeeef7;
+  --code-comment: #9392a3;
+  --code-punctuation: #c3c1d4;
+  --code-literal: #f19abb;
+  --code-string: #9fd5b2;
+  --code-operator: #f0c182;
+  --code-keyword: #bdb2ff;
+  --code-function: #83cee7;
+  --code-variable: #edc67f;
   --diagram-font: var(--heading-font);
   color-scheme: dark;
 }

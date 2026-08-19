@@ -9,5 +9,16 @@
   --document-font: Charter, "Bitstream Charter", Georgia, serif;
   --heading-font: "Gill Sans", "Trebuchet MS", sans-serif;
   --code-font: "IBM Plex Mono", Consolas, "Liberation Mono", monospace;
+  --code-background: #fff4f5;
+  --code-border: #ead5d7;
+  --code-text: #39292c;
+  --code-comment: #8b7176;
+  --code-punctuation: #6c5358;
+  --code-literal: #b54567;
+  --code-string: #487856;
+  --code-operator: #a35f25;
+  --code-keyword: #8b4aa1;
+  --code-function: #39758a;
+  --code-variable: #a45f24;
   --diagram-font: var(--heading-font);
 }

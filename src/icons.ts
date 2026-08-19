@@ -27,6 +27,7 @@ export type IconName =
   | 'italic'
   | 'link'
   | 'list-bulleted'
+  | 'list-check'
   | 'list-numbered'
   | 'more'
   | 'paste'
@@ -76,6 +77,7 @@ const paths: Record<IconName, string> = {
   italic: '<path d="M10 5h7M7 19h7m1-14L9 19"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/>',
   'list-bulleted': '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  'list-check': '<rect x="3" y="4" width="5" height="5"/><path d="m4.5 6.5 1.2 1.2L8.5 4.8M11 6.5h10"/><rect x="3" y="15" width="5" height="5"/><path d="M11 17.5h10"/>',
   'list-numbered': '<path d="M10 6h10m-10 6h10m-10 6h10M4 5h2v3M4 12h2l-2 3h2m-2 3h2v3H4"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   paste: '<path d="M9 5h6v3H9z"/><path d="M7 7H5v14h14V7h-2"/><path d="M9 13h6m-3-3v6"/>',

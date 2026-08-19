@@ -16,6 +16,17 @@
   --document-font: "Trebuchet MS", "Segoe UI", sans-serif;
   --heading-font: Futura, "Century Gothic", "Trebuchet MS", sans-serif;
   --code-font: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --code-background: #141928;
+  --code-border: #39405d;
+  --code-text: #e1e5f5;
+  --code-comment: #8992ad;
+  --code-punctuation: #b9c0d8;
+  --code-literal: #f296ba;
+  --code-string: #91d3af;
+  --code-operator: #f0bf7b;
+  --code-keyword: #b5a9ff;
+  --code-function: #80cce8;
+  --code-variable: #ecc47c;
   --diagram-font: var(--heading-font);
   color-scheme: dark;
 }

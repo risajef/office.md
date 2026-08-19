@@ -1118,7 +1118,9 @@ const pageSettingsFor = (fileId: string) => {
   const fallback = defaultPageSettings()
   const stored = pageSettingsByFile[fileId]
   const normalized: StoredPageSettings = {
-    mode: stored?.mode === 'document' || stored?.mode === 'presentation'
+    mode: stored?.mode === 'continuous'
+      || stored?.mode === 'document'
+      || stored?.mode === 'presentation'
       ? stored.mode
       : fallback.mode,
     document: normalizePageFormat(stored?.document, fallback.document),
@@ -1186,6 +1188,7 @@ const renderPageFormatOptions = () => {
   const showPageControls = settings.mode !== 'continuous'
   pageFormatSelect.closest<HTMLElement>('.layout-control')?.toggleAttribute('hidden', !showPageControls)
   pageSettingsButton?.toggleAttribute('hidden', !showPageControls)
+  pageCountElement?.toggleAttribute('hidden', !showPageControls)
 }
 
 const requestCustomPageSize = async (editor: EditorInstance) => {

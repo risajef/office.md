@@ -9,5 +9,16 @@
   --document-font: Athelas, Charter, Georgia, serif;
   --heading-font: Optima, Candara, "Segoe UI", sans-serif;
   --code-font: "Source Code Pro", Consolas, "Liberation Mono", monospace;
+  --code-background: #f0f5ef;
+  --code-border: #d2ddd3;
+  --code-text: #263329;
+  --code-comment: #748078;
+  --code-punctuation: #506057;
+  --code-literal: #a34a5e;
+  --code-string: #347451;
+  --code-operator: #8c6420;
+  --code-keyword: #6b58a1;
+  --code-function: #337185;
+  --code-variable: #8c6420;
   --diagram-font: var(--heading-font);
 }
