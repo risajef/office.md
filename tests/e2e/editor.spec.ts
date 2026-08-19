@@ -579,6 +579,11 @@ test.describe('rich document behavior', () => {
     page,
   }) => {
     const preview = page.locator('.mermaid-preview').first()
+    const dataSource = page.locator('.mermaid-block').first().locator(
+      '.mermaid-data-source',
+    )
+    await expect(dataSource).toContainText('CSV data source')
+    await expect(dataSource.locator('code')).toHaveText('data.csv')
     await expect(preview.locator('svg')).toBeVisible({ timeout: 20_000 })
     await expect(preview).toContainText('Jan')
     await expect(preview).toContainText('120')
@@ -645,6 +650,7 @@ test.describe('rich document behavior', () => {
     await page.locator('#source-dialog-input').fill('flowchart LR\n  Start --> Finish')
     await page.locator('#source-dialog-submit').click()
     await expect(diagrams).toHaveCount(originalCount + 1)
+    await expect(diagrams.last().locator('.mermaid-data-source')).toHaveCount(0)
     await expect(page.locator('#debug-markdown-content')).toHaveValue(
       /```mermaid\nflowchart LR/,
     )
@@ -654,17 +660,36 @@ test.describe('rich document behavior', () => {
     await page.locator('#source-dialog-input').fill('flowchart LR\n  A2 --> B2')
     await page.locator('#source-dialog-submit').click()
     await expect(diagrams).toHaveCount(originalCount + 2)
+    const linkedDiagram = diagrams.filter({
+      has: page.locator('.mermaid-data-source'),
+    }).last()
+    await expect(linkedDiagram.locator('.mermaid-data-source')).toContainText('data.csv')
     await expect(page.locator('#debug-markdown-content')).toHaveValue(
       /```mermaid\(data\.csv\)/,
     )
 
-    const newest = page.locator('.mermaid-preview').last()
+    const newest = linkedDiagram.locator('.mermaid-preview')
     await expect(newest.locator('svg')).toBeVisible({ timeout: 20_000 })
     await newest.click()
     const sourceEditor = page.locator('.mermaid-source-editor')
     await sourceEditor.fill('flowchart LR\n  A2 --> C2')
     await sourceEditor.press('Control+Enter')
     await expect(page.locator('#debug-markdown-content')).toHaveValue(/A2 --> C2/)
+  })
+
+  test('edits a code block programming language', async ({ page }) => {
+    const codeBlock = page.locator('.code-block').first()
+    const language = codeBlock.getByLabel('Programming language')
+    await expect(language).toHaveValue('javascript')
+
+    await language.fill('python')
+    await language.press('Enter')
+
+    await expect(language).toHaveValue('python')
+    await expect(codeBlock.locator('pre')).toHaveAttribute('data-language', 'python')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /```python\nconst themed = true/,
+    )
   })
 
   test('page settings drive layout and HTML/portable exports contain materialized output', async ({

@@ -39,7 +39,7 @@ const cleanClone = (root: HTMLElement) => {
     element.removeAttribute('title')
   })
   root.querySelectorAll(
-    '.markdown-include-header, .mermaid-source-editor, .latex-source-editor',
+    '.markdown-include-header, .code-block-header, .mermaid-source-editor, .latex-source-editor',
   ).forEach((element) => element.remove())
   root.querySelectorAll<HTMLElement>(
     '.ProseMirror-selectednode, .is-selected, .is-editing',

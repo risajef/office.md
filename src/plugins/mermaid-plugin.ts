@@ -42,21 +42,99 @@ const getCsvSourceName = (node: Node) => {
   return match?.[1]?.trim()
 }
 
-const createCodeView = (initialNode: Node): ReturnType<NodeViewConstructor> => {
-  const dom = document.createElement('pre')
+const createCodeView = (
+  initialNode: Parameters<NodeViewConstructor>[0],
+  view: Parameters<NodeViewConstructor>[1],
+  getPos: Parameters<NodeViewConstructor>[2],
+): ReturnType<NodeViewConstructor> => {
+  const dom = document.createElement('div')
+  dom.className = 'code-block'
+
+  const header = document.createElement('div')
+  header.className = 'code-block-header'
+  header.contentEditable = 'false'
+  const label = document.createElement('label')
+  label.className = 'code-block-language-label'
+  label.textContent = 'Language'
+  const language = document.createElement('input')
+  language.type = 'text'
+  language.className = 'code-block-language'
+  language.placeholder = 'Plain text'
+  language.autocomplete = 'off'
+  language.spellcheck = false
+  language.setAttribute('aria-label', 'Programming language')
+  label.append(language)
+  header.append(label)
+
   const contentDOM = document.createElement('code')
-  dom.append(contentDOM)
+  const pre = document.createElement('pre')
+  pre.append(contentDOM)
+  dom.append(header, pre)
+
+  let currentNode = initialNode
+
+  const syncLanguage = (node: Node) => {
+    const value = String(node.attrs.language ?? '')
+    language.value = value
+    if (value) {
+      pre.dataset.language = value
+    } else {
+      delete pre.dataset.language
+    }
+  }
+
+  const commitLanguage = () => {
+    const value = language.value.trim()
+    if (value === String(currentNode.attrs.language ?? '')) return
+    const position = getPos?.()
+    if (typeof position !== 'number') return
+    const node = view.state.doc.nodeAt(position)
+    if (!node || node.type !== currentNode.type) return
+    view.dispatch(
+      view.state.tr
+        .setNodeAttribute(position, 'language', value)
+        .scrollIntoView(),
+    )
+  }
+
+  const onLanguageKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commitLanguage()
+      view.focus()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      language.value = String(currentNode.attrs.language ?? '')
+      view.focus()
+    }
+  }
+
+  language.addEventListener('change', commitLanguage)
+  language.addEventListener('keydown', onLanguageKeyDown)
+  syncLanguage(initialNode)
 
   return {
     dom,
     contentDOM,
-    update: (updatedNode) =>
-      updatedNode.type === initialNode.type && !isMermaidBlock(updatedNode),
+    update: (updatedNode) => {
+      if (updatedNode.type !== initialNode.type || isMermaidBlock(updatedNode)) {
+        return false
+      }
+      currentNode = updatedNode
+      syncLanguage(updatedNode)
+      return true
+    },
+    stopEvent: (event) => header.contains(event.target as globalThis.Node),
+    ignoreMutation: (mutation) => !contentDOM.contains(mutation.target),
+    destroy: () => {
+      language.removeEventListener('change', commitLanguage)
+      language.removeEventListener('keydown', onLanguageKeyDown)
+    },
   }
 }
 
 const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
-  if (!isMermaidBlock(initialNode)) return createCodeView(initialNode)
+  if (!isMermaidBlock(initialNode)) return createCodeView(initialNode, view, getPos)
 
   const dom = document.createElement('div')
   dom.className = 'mermaid-block'
@@ -65,12 +143,28 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
   const preview = document.createElement('div')
   preview.className = 'mermaid-preview'
   preview.title = 'Click to edit Mermaid source'
-  dom.append(preview)
+
+  const dataSource = document.createElement('div')
+  dataSource.className = 'mermaid-data-source markdown-include-header'
+  const dataSourceIdentity = document.createElement('div')
+  dataSourceIdentity.className = 'markdown-include-identity'
+  const dataSourceLabel = document.createElement('span')
+  dataSourceLabel.className = 'markdown-include-label'
+  const dataSourceFile = document.createElement('code')
+  dataSourceIdentity.append(dataSourceLabel, dataSourceFile)
+  dataSource.append(dataSourceIdentity)
 
   let currentNode = initialNode
   let currentRender = 0
   let editing = false
   let sourceEditor: HTMLTextAreaElement | undefined
+
+  const showBody = (body: HTMLElement) => {
+    dom.replaceChildren()
+    if (getCsvSourceName(currentNode)) dom.append(dataSource)
+    dom.append(body)
+  }
+  showBody(preview)
 
   const applySvgTypography = () => {
     const svg = preview.querySelector<SVGElement>('svg')
@@ -115,6 +209,12 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
 
     const csvFileName = getCsvSourceName(node)
     const csvSource = csvFileName ? resolveCsvSource(csvFileName) : undefined
+    if (csvFileName) {
+      dataSourceLabel.textContent = csvSource === undefined
+        ? 'Missing CSV data source'
+        : 'CSV data source'
+      dataSourceFile.textContent = csvFileName
+    }
     const renderCode = csvSource ? expandCsvReferences(code, csvSource) : code
     const renderId = ++renderSequence
     currentRender = renderId
@@ -148,7 +248,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     editing = false
     sourceEditor = undefined
     dom.classList.remove('is-editing')
-    dom.replaceChildren(preview)
+    showBody(preview)
 
     if (typeof position === 'number') {
       const codeBlock = view.state.schema.nodes.code_block
@@ -181,7 +281,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     sourceEditor = editor
     dom.classList.add('is-editing')
     dom.hidden = false
-    dom.replaceChildren(editor)
+    showBody(editor)
 
     editor.addEventListener('blur', () => finishEditing(true), { once: true })
     editor.addEventListener('keydown', (event) => {
