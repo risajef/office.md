@@ -104,11 +104,8 @@ import { createIcon, hydrateIcons, setIcon } from './icons'
 const STORAGE_KEY = 'milkdown-minimal-editor-draft-v3'
 const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
-const EDITOR_WIDTH_KEY = 'milkdown-editor-width-v2'
 const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
 const LOCAL_SERVER_PATH_KEY = 'milkdown-editor-local-server-path-v1'
-const MIN_EDITOR_WIDTH = 520
-const DEFAULT_EDITOR_WIDTH = 960
 
 type PagePreset = 'a4-portrait' | 'a4-landscape' | 'slide-16-9' | 'custom'
 
@@ -261,8 +258,6 @@ const csvInsertTableButton = document.querySelector<HTMLButtonElement>('#csv-ins
 const csvInsertDiagramButton = document.querySelector<HTMLButtonElement>('#csv-insert-diagram')
 const csvCloseButton = document.querySelector<HTMLButtonElement>('#csv-close')
 const csvEditorStatus = document.querySelector<HTMLElement>('#csv-editor-status')
-const workspaceLayout = document.querySelector<HTMLElement>('.workspace-layout')
-const editorWidthResizer = document.querySelector<HTMLElement>('#editor-width-resizer')
 const debugMarkdownView = document.querySelector<HTMLElement>(
   '#debug-markdown-view',
 )
@@ -290,87 +285,6 @@ if (debugMarkdownView) debugMarkdownView.hidden = !isDebugMode
 if (!editorRoot) {
   throw new Error('The editor root could not be initialized.')
 }
-
-let editorWidth = DEFAULT_EDITOR_WIDTH
-
-const getEditorWidthMaximum = () => {
-  if (!workspaceLayout) return DEFAULT_EDITOR_WIDTH
-  const fixedColumns = 190 + 12 + 220
-  const gaps = 16 * 3
-  return Math.max(
-    MIN_EDITOR_WIDTH,
-    Math.floor(workspaceLayout.getBoundingClientRect().width - fixedColumns - gaps),
-  )
-}
-
-const setEditorWidth = (requestedWidth: number, persist = true) => {
-  if (!workspaceLayout || !editorWidthResizer) return
-  if (window.matchMedia('(max-width: 1000px)').matches) {
-    workspaceLayout.style.removeProperty('--editor-column')
-    return
-  }
-
-  const maximum = getEditorWidthMaximum()
-  editorWidth = Math.min(maximum, Math.max(MIN_EDITOR_WIDTH, Math.round(requestedWidth)))
-  workspaceLayout.style.setProperty('--editor-column', `${editorWidth}px`)
-  editorWidthResizer.setAttribute('aria-valuemin', String(MIN_EDITOR_WIDTH))
-  editorWidthResizer.setAttribute('aria-valuemax', String(maximum))
-  editorWidthResizer.setAttribute('aria-valuenow', String(editorWidth))
-  if (persist) window.localStorage.setItem(EDITOR_WIDTH_KEY, String(editorWidth))
-}
-
-const storedEditorWidth = Number(window.localStorage.getItem(EDITOR_WIDTH_KEY))
-setEditorWidth(Number.isFinite(storedEditorWidth) && storedEditorWidth > 0
-  ? storedEditorWidth
-  : DEFAULT_EDITOR_WIDTH, false)
-
-if (editorWidthResizer) {
-  let resizePointerId: number | undefined
-  let resizeStartX = 0
-  let resizeStartWidth = editorWidth
-
-  editorWidthResizer.addEventListener('pointerdown', (event) => {
-    if (window.matchMedia('(max-width: 1000px)').matches) return
-    event.preventDefault()
-    resizePointerId = event.pointerId
-    resizeStartX = event.clientX
-    resizeStartWidth = editorWidth
-    editorWidthResizer.setPointerCapture?.(event.pointerId)
-    document.body.classList.add('is-resizing')
-  })
-
-  editorWidthResizer.addEventListener('pointermove', (event) => {
-    if (resizePointerId !== event.pointerId) return
-    setEditorWidth(resizeStartWidth + event.clientX - resizeStartX, false)
-  })
-
-  const finishResize = (event: PointerEvent) => {
-    if (resizePointerId !== event.pointerId) return
-    resizePointerId = undefined
-    editorWidthResizer.releasePointerCapture?.(event.pointerId)
-    document.body.classList.remove('is-resizing')
-    window.localStorage.setItem(EDITOR_WIDTH_KEY, String(editorWidth))
-  }
-
-  editorWidthResizer.addEventListener('pointerup', finishResize)
-  editorWidthResizer.addEventListener('pointercancel', finishResize)
-  editorWidthResizer.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      event.preventDefault()
-      setEditorWidth(editorWidth + (event.key === 'ArrowRight' ? 24 : -24))
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      setEditorWidth(MIN_EDITOR_WIDTH)
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      setEditorWidth(getEditorWidthMaximum())
-    }
-  })
-}
-
-window.addEventListener('resize', () => {
-  setEditorWidth(editorWidth, false)
-})
 
 type WorkspaceFile = {
   id: string
@@ -625,6 +539,7 @@ const updateDocumentNameControls = (file = activeFile()) => {
     ? 'No editable files'
     : 'untitled.md'
   const name = file?.name ?? fallbackName
+  document.title = name
   if (documentName) documentName.textContent = name
   if (file?.kind === 'csv' && csvEditorName) csvEditorName.textContent = name
 
@@ -2010,7 +1925,7 @@ const renameFile = async (editor: EditorInstance, fileId: string) => {
 
     migrateRenamedFileIdentity(file, newName, newHandle)
     persistWorkspace()
-    updateDocumentNameControls(file)
+    updateDocumentNameControls()
     renderFileList(editor)
     notifyMarkdownIncludesChanged()
     notifyMermaidCsvDataChanged()

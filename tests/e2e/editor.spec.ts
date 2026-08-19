@@ -106,6 +106,11 @@ const openWorkspace = async (page: Page, directory: string) => {
 
   await expect(page.locator('#folder-status')).toContainText('disk-backed')
   await expect(page.locator('#document-name')).toHaveText('document.md')
+  await expect(page).toHaveTitle('document.md')
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute(
+    'href',
+    '/favicon.svg',
+  )
   await expect(page.locator('#debug-markdown-content')).toHaveValue(
     /Project document/,
   )
@@ -282,6 +287,7 @@ test.describe('disk-backed editor workflows', () => {
     await page.locator('#source-dialog-input').fill('renamed.md')
     await page.locator('#source-dialog-submit').click()
     await expect(page.locator('#document-name')).toHaveText('renamed.md')
+    await expect(page).toHaveTitle('renamed.md')
     await expect(access(workspace.file('document.md'))).rejects.toThrow()
     expect(await readFile(workspace.file('renamed.md'), 'utf8')).toBe(documentMarkdown)
 
@@ -292,6 +298,7 @@ test.describe('disk-backed editor workflows', () => {
     await page.locator('#source-dialog-input').fill('new-notes')
     await page.locator('#source-dialog-submit').click()
     await expect(page.locator('#document-name')).toHaveText('new-notes.md')
+    await expect(page).toHaveTitle('new-notes.md')
     await expect.poll(() => readFile(workspace.file('new-notes.md'), 'utf8')).toContain(
       '# new-notes',
     )
@@ -309,6 +316,7 @@ test.describe('disk-backed editor workflows', () => {
   }) => {
     await page.locator('[title="Open data.csv"]').click()
     await expect(page.locator('#csv-editor-card')).toBeVisible()
+    await expect(page).toHaveTitle('data.csv')
     await expect(page.locator('#document-outline')).toContainText('No outline for CSV files')
     await expect(page.locator('#rename-csv-document')).toBeEnabled()
 
@@ -393,6 +401,7 @@ test.describe('disk-backed editor workflows', () => {
     await page.locator('#source-dialog-input').fill('renamed-data.csv')
     await page.locator('#source-dialog-submit').click()
     await expect(page.locator('#csv-editor-name')).toHaveText('renamed-data.csv')
+    await expect(page).toHaveTitle('renamed-data.csv')
     await expect(access(workspace.file('data.csv'))).rejects.toThrow()
     await expect(access(workspace.file('renamed-data.csv'))).resolves.toBeUndefined()
   })
@@ -401,10 +410,16 @@ test.describe('disk-backed editor workflows', () => {
 test.describe('rich document behavior', () => {
   test('keeps document toolbars visible while scrolling', async ({ page }) => {
     const toolbarStack = page.locator('.editor-toolbar-stack')
+    const outline = page.locator('.outline-sidebar')
+    const files = page.locator('.workspace-sidebar')
     await expect(toolbarStack).toBeVisible()
+    await expect(outline).toBeVisible()
+    await expect(files).toBeVisible()
     await expect.poll(() => toolbarStack.evaluate(
       (element) => getComputedStyle(element).position,
     )).toBe('sticky')
+    await expect(outline).toHaveCSS('position', 'sticky')
+    await expect(files).toHaveCSS('position', 'sticky')
 
     await page.evaluate(() => window.scrollTo({ top: 900, behavior: 'instant' }))
     await expect.poll(() => toolbarStack.evaluate(
@@ -414,6 +429,45 @@ test.describe('rich document behavior', () => {
     await expect(page.locator(
       '.rich-content-toolbar--persistent [data-command="formula"]',
     )).toBeVisible()
+    await expect.poll(() => outline.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().top),
+    )).toBe(8)
+    await expect.poll(() => files.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().top),
+    )).toBe(8)
+  })
+
+  test('prioritizes sidebars and restores the automatic document width', async ({
+    page,
+  }) => {
+    const main = page.locator('.workspace-main')
+    const outline = page.locator('.outline-sidebar')
+    const files = page.locator('.workspace-sidebar')
+    await page.setViewportSize({ width: 1400, height: 900 })
+    await expect(outline).toBeVisible()
+    await expect(files).toBeVisible()
+    await expect(page.locator('.workspace-resizer')).toHaveCount(0)
+    const wideWidth = await main.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().width),
+    )
+
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await expect.poll(() => main.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().width),
+    )).toBeLessThan(wideWidth)
+
+    await page.setViewportSize({ width: 1400, height: 900 })
+    await expect.poll(() => main.evaluate(
+      (element) => Math.round(element.getBoundingClientRect().width),
+    )).toBe(wideWidth)
+
+    await page.setViewportSize({ width: 1000, height: 900 })
+    await expect(outline).toBeHidden()
+    await expect(files).toBeVisible()
+
+    await page.setViewportSize({ width: 700, height: 900 })
+    await expect(outline).toBeHidden()
+    await expect(files).toBeHidden()
   })
 
   test('creates and toggles Markdown checklist items', async ({ page }) => {
