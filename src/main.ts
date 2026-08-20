@@ -400,6 +400,7 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
 let selectedDirectory: LocalDirectoryHandle | undefined
 let selectedServerWorkspace: LocalServerWorkspace | undefined
 const dirtyDiskFiles = new Set<string>()
+const cleanMarkdownByFile = new Map<string, string>()
 const evaluatedCsvSources = new Map<string, string>()
 const collapsedFolders = new Set<string>()
 let workspaceActionPending = false
@@ -1250,37 +1251,29 @@ const exitPresentation = async (editor: EditorInstance) => {
   })
 }
 
-const setCsvStatus = (message: string) => {
+const setCsvStatus = (
+  message: string,
+  state: 'ready' | 'saving' | 'saved' = 'ready',
+) => {
   if (!csvEditorStatus) return
   csvEditorStatus.title = message
   csvEditorStatus.dataset.tooltip = message
   csvEditorStatus.setAttribute('aria-label', message)
+  const dot = csvEditorStatus.querySelector<HTMLElement>('.status-dot')
+  if (dot) dot.dataset.state = state
 }
 
-const persistActiveCsv = () => {
-  const file = workspaceFiles.find((candidate) => candidate.id === activeCsvFileId)
-  if (file?.kind === 'csv' && activeCsvWorksheet) {
-    syncCsvFile(file, activeCsvWorksheet)
-  }
-}
-
-const storeActiveFile = async () => {
-  persistActiveCsv()
-  const file = activeFile()
-  if (!file) return false
-
-  if (file.kind === 'markdown' && workspaceEditor) {
-    file.markdown = getMarkdown(workspaceEditor)
-    window.localStorage.setItem(STORAGE_KEY, file.markdown)
-  }
-  persistWorkspace()
+const saveDiskFile = async (
+  file: WorkspaceFile,
+  options: { requestPermission?: boolean } = {},
+) => {
+  if (!isDiskBackedFile(file)) return true
 
   try {
     if (file.source === 'server') {
       await writeServerBackedFile(file)
       dirtyDiskFiles.delete(file.id)
-      setStatus(`Stored ${file.name} on disk`, 'saved')
-      setCsvStatus(`Stored ${file.name} on disk`)
+      cleanMarkdownByFile.set(file.id, file.markdown)
       return true
     }
 
@@ -1289,7 +1282,11 @@ const storeActiveFile = async () => {
     }
     if (
       selectedDirectory &&
-      !await ensureLocalPermission(selectedDirectory, 'readwrite', true)
+      !await ensureLocalPermission(
+        selectedDirectory,
+        'readwrite',
+        options.requestPermission ?? false,
+      )
     ) {
       throw new Error('Read and write permission is required for this folder.')
     }
@@ -1308,25 +1305,56 @@ const storeActiveFile = async () => {
       if (file.source === 'folder') {
         throw new Error(`Could not find ${file.name} in the open folder.`)
       }
-      setStatus(`Stored ${file.name} in browser storage`, 'saved')
       return true
     }
 
     await writeLocalTextFile(
       { handle, markdown: file.markdown },
-      { requestPermission: true },
+      { requestPermission: options.requestPermission ?? false },
     )
     dirtyDiskFiles.delete(file.id)
-    setStatus(`Stored ${file.name} on disk`, 'saved')
-    setCsvStatus(`Stored ${file.name} on disk`)
+    cleanMarkdownByFile.set(file.id, file.markdown)
     return true
   } catch (error) {
     console.error(`Could not store ${file.name}.`, error)
     const message = error instanceof Error ? error.message : `Could not store ${file.name}.`
+    dirtyDiskFiles.add(file.id)
     setStatus(message, 'ready')
-    setCsvStatus(message)
+    setCsvStatus(message, 'ready')
     return false
   }
+}
+
+const persistActiveCsv = () => {
+  const file = workspaceFiles.find((candidate) => candidate.id === activeCsvFileId)
+  if (file?.kind === 'csv' && activeCsvWorksheet) {
+    syncCsvFile(file, activeCsvWorksheet, false)
+  }
+}
+
+const storeActiveFile = async () => {
+  persistActiveCsv()
+  const file = activeFile()
+  if (!file) return false
+
+  if (file.kind === 'markdown' && workspaceEditor) {
+    file.markdown = getMarkdown(workspaceEditor)
+    window.localStorage.setItem(STORAGE_KEY, file.markdown)
+  }
+  persistWorkspace()
+
+  if (isDiskBackedFile(file)) {
+    const success = await saveDiskFile(file, { requestPermission: true })
+    if (success) {
+      setStatus(`Stored ${file.name} on disk`, 'saved')
+      setCsvStatus(`Stored ${file.name} on disk`, 'saved')
+    }
+    return success
+  }
+
+  setStatus(`Stored ${file.name} in browser storage`, 'saved')
+  setCsvStatus(`Stored ${file.name} in browser storage`, 'saved')
+  return true
 }
 
 const reloadProject = async (editor: EditorInstance) => {
@@ -1376,6 +1404,10 @@ const reloadProject = async (editor: EditorInstance) => {
 }
 
 const destroyCsvEditor = () => {
+  if (csvSaveTimer !== undefined) {
+    window.clearTimeout(csvSaveTimer)
+    csvSaveTimer = undefined
+  }
   csvContextToolbar.close()
   try {
     jspreadsheet.destroy(
@@ -1562,7 +1594,39 @@ const csvRowsFromWorksheet = (
 const evaluatedCsvFromWorksheet = (worksheet: CsvWorksheet) =>
   serializeCsv(csvRowsFromWorksheet(worksheet, true))
 
-const syncCsvFile = (file: WorkspaceFile, worksheet: CsvWorksheet) => {
+let csvSaveTimer: number | undefined
+
+const scheduleCsvAutoSave = (file: WorkspaceFile) => {
+  if (csvSaveTimer !== undefined) window.clearTimeout(csvSaveTimer)
+  setCsvStatus(
+    isDiskBackedFile(file) ? 'Saving to disk…' : 'Saving locally…',
+    'saving',
+  )
+  setStatus(
+    isDiskBackedFile(file) ? 'Saving to disk…' : 'Saving locally…',
+    'saving',
+  )
+
+  csvSaveTimer = window.setTimeout(async () => {
+    csvSaveTimer = undefined
+    if (isDiskBackedFile(file)) {
+      const saved = await saveDiskFile(file)
+      if (saved) {
+        setCsvStatus('Stored on disk', 'saved')
+        setStatus('Stored on disk', 'saved')
+      }
+    } else {
+      setCsvStatus('Saved in browser storage', 'saved')
+      setStatus('Saved in browser storage', 'saved')
+    }
+  }, 450)
+}
+
+const syncCsvFile = (
+  file: WorkspaceFile,
+  worksheet: CsvWorksheet,
+  autoSave = true,
+) => {
   if (file.kind !== 'csv') return
   // Keep formulas in the editable source. The processed values live in a
   // separate cache used by previews, includes, and portable exports.
@@ -1572,11 +1636,18 @@ const syncCsvFile = (file: WorkspaceFile, worksheet: CsvWorksheet) => {
   persistWorkspace()
   notifyMarkdownIncludesChanged()
   notifyMermaidCsvDataChanged()
-  setCsvStatus(
-    isDiskBackedFile(file)
-      ? 'Edited locally · use Store to write to disk'
-      : 'Saved in browser storage',
-  )
+  if (autoSave) {
+    scheduleCsvAutoSave(file)
+  } else {
+    setCsvStatus(
+      isDiskBackedFile(file)
+        ? dirtyDiskFiles.has(file.id)
+          ? 'Edited locally · use Store to write to disk'
+          : 'Stored on disk'
+        : 'Saved in browser storage',
+      dirtyDiskFiles.has(file.id) ? 'ready' : 'saved',
+    )
+  }
 }
 
 const evaluateCsvFile = async (file: WorkspaceFile) => {
@@ -1820,6 +1891,19 @@ const openCsvFile = (file: WorkspaceFile) => {
 }
 
 const openFile = (editor: EditorInstance, fileId: string) => {
+  const current = activeFile()
+  if (current && current.id !== fileId) {
+    if (current.kind === 'markdown' && workspaceEditor) {
+      current.markdown = getMarkdown(workspaceEditor)
+      window.localStorage.setItem(STORAGE_KEY, current.markdown)
+    }
+    persistActiveCsv()
+    persistWorkspace()
+    if (isDiskBackedFile(current) && dirtyDiskFiles.has(current.id)) {
+      void saveDiskFile(current)
+    }
+  }
+
   const file = workspaceFiles.find((candidate) => candidate.id === fileId)
   if (!file) return
 
@@ -1841,7 +1925,9 @@ const openFile = (editor: EditorInstance, fileId: string) => {
   renderFileList(editor)
   renderPageFormatOptions()
   loadMarkdown(editor, file.markdown)
-  setStatus('Opened locally', 'ready')
+  cleanMarkdownByFile.set(file.id, getMarkdown(editor))
+  dirtyDiskFiles.delete(file.id)
+  setStatus(isDiskBackedFile(file) ? 'Loaded from disk' : 'Opened locally', 'ready')
 }
 
 const migrateRenamedFileIdentity = (
@@ -1863,6 +1949,11 @@ const migrateRenamedFileIdentity = (
   if (lastMarkdownFileId === oldId) lastMarkdownFileId = newId
   if (activeCsvFileId === oldId) activeCsvFileId = newId
   if (dirtyDiskFiles.delete(oldId)) dirtyDiskFiles.add(newId)
+  const clean = cleanMarkdownByFile.get(oldId)
+  if (clean !== undefined) {
+    cleanMarkdownByFile.delete(oldId)
+    cleanMarkdownByFile.set(newId, clean)
+  }
   if (evaluatedCsvSources.has(oldId)) {
     const evaluated = evaluatedCsvSources.get(oldId) as string
     evaluatedCsvSources.delete(oldId)
@@ -1905,6 +1996,9 @@ const renameFile = async (editor: EditorInstance, fileId: string) => {
   persistActiveCsv()
   if (file.kind === 'markdown' && file.id === activeFileId) {
     file.markdown = getMarkdown(editor)
+  }
+  if (isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
+    await saveDiskFile(file)
   }
 
   const oldName = file.name
@@ -2129,6 +2223,7 @@ const loadWorkspaceFromDirectory = async (
 
   const localFiles = await readLocalTextFiles(directory)
   dirtyDiskFiles.clear()
+  cleanMarkdownByFile.clear()
   if (options.editor && activeCsvWorksheet) destroyCsvEditor()
   selectedServerWorkspace = undefined
   selectedDirectory = directory
@@ -2170,6 +2265,7 @@ const loadWorkspaceFromServer = async (
   } = {},
 ) => {
   dirtyDiskFiles.clear()
+  cleanMarkdownByFile.clear()
   if (options.editor && activeCsvWorksheet) destroyCsvEditor()
   selectedDirectory = undefined
   selectedServerWorkspace = snapshot.workspace
@@ -2377,7 +2473,10 @@ const startEditor = async () => {
           if (file) {
             file.markdown = markdown
             if (isDiskBackedFile(file) && !isLoadingMarkdown) {
-              dirtyDiskFiles.add(file.id)
+              const clean = cleanMarkdownByFile.get(file.id)
+              if (clean === undefined || markdown !== clean) {
+                dirtyDiskFiles.add(file.id)
+              }
             }
           }
           persistWorkspace()
@@ -2385,17 +2484,28 @@ const startEditor = async () => {
           notifyMarkdownIncludesChanged()
           if (editorInstance) scheduleOutlineUpdate(editorInstance)
         },
-        onSaving: () => setStatus('Saving locally…', 'saving'),
-        onSaved: () => {
+        onSaving: () => {
+          if (isLoadingMarkdown) return
           const file = activeFile()
+          if (isDiskBackedFile(file) && !dirtyDiskFiles.has(file?.id ?? '')) return
           setStatus(
-            isDiskBackedFile(file)
-              ? dirtyDiskFiles.has(file?.id ?? '')
-                ? 'Edited locally · use Store to write to disk'
-                : 'Stored on disk'
-              : 'Saved in browser storage',
-            'saved',
+            isDiskBackedFile(file) ? 'Saving to disk…' : 'Saving locally…',
+            'saving',
           )
+        },
+        onSaved: async () => {
+          if (isLoadingMarkdown) return
+          const file = activeFile()
+          if (!file) return
+          if (isDiskBackedFile(file)) {
+            if (!dirtyDiskFiles.has(file.id)) return
+            const saved = await saveDiskFile(file)
+            if (saved) {
+              setStatus('Stored on disk', 'saved')
+            }
+          } else {
+            setStatus('Saved in browser storage', 'saved')
+          }
         },
       }),
     )
@@ -2404,7 +2514,10 @@ const startEditor = async () => {
   editorInstance = editor
   workspaceEditor = editor
   configureDiagramCommand(() => addMermaidDiagram(editor))
-  if (currentMarkdownFile) dirtyDiskFiles.delete(currentMarkdownFile.id)
+  if (currentMarkdownFile) {
+    cleanMarkdownByFile.set(currentMarkdownFile.id, getMarkdown(editor))
+    dirtyDiskFiles.delete(currentMarkdownFile.id)
+  }
   configureMarkdownIncludeRenderer((markdown) =>
     editor.action((ctx) => ctx.get(parserCtx)(markdown)),
   )
@@ -2592,6 +2705,10 @@ const startEditor = async () => {
     if (debugRenderTimer !== undefined) flushDebugSource()
     persistActiveCsv()
     persistWorkspace()
+    const file = activeFile()
+    if (file && isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
+      void saveDiskFile(file)
+    }
     csvContextToolbar.destroy()
     editor.destroy()
   })

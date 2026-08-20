@@ -246,11 +246,11 @@ base.describe('local filesystem bridge', () => {
 })
 
 test.describe('disk-backed editor workflows', () => {
-  test('does not autosave to disk, then Store writes and Reload rereads disk', async ({
+  test('autosaves to disk, and Reload rereads disk', async ({
     page,
     workspace,
   }) => {
-    const changed = '# Edited locally\n\nThis should not reach disk until Store.'
+    const changed = '# Edited locally\n\nThis should reach disk automatically.'
     await page.evaluate(() => {
       const editor = document.querySelector('.milkdown')
       ;(window as typeof window & { __editorWasRemoved?: boolean }).__editorWasRemoved = false
@@ -261,16 +261,19 @@ test.describe('disk-backed editor workflows', () => {
       }).observe(document.body, { childList: true, subtree: true })
     })
     await editMarkdownSource(page, changed)
-    await page.waitForTimeout(500)
-    expect(await readFile(workspace.file('document.md'), 'utf8')).toBe(documentMarkdown)
+    await expect.poll(
+      () => readFile(workspace.file('document.md'), 'utf8'),
+    ).toBe(`${changed}\n`)
     expect(await page.evaluate(() => (
       window as typeof window & { __editorWasRemoved?: boolean }
     ).__editorWasRemoved)).toBe(false)
 
+    const storedDirectly = '# Stored directly\n\nImmediate save.'
+    await editMarkdownSource(page, storedDirectly)
     await storeMarkdown(page)
     await expect.poll(
       () => readFile(workspace.file('document.md'), 'utf8'),
-    ).toBe(`${changed}\n`)
+    ).toBe(`${storedDirectly}\n`)
 
     const external = '# Changed on disk\n\nReloaded content.'
     await writeFile(workspace.file('document.md'), external)
@@ -335,7 +338,9 @@ test.describe('disk-backed editor workflows', () => {
     })
     expect(formula.raw).toBe('=B3*C3')
     expect(String(formula.processed)).toBe('4144')
-    expect(await readFile(workspace.file('data.csv'), 'utf8')).toBe(csvSource)
+    await expect.poll(() => readFile(workspace.file('data.csv'), 'utf8')).toContain(
+      '=B3*C3',
+    )
 
     await page.locator('.csv-editor-card [data-project-action="store"]').click()
     await expect.poll(() => readFile(workspace.file('data.csv'), 'utf8')).toContain(

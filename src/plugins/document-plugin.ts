@@ -10,7 +10,7 @@ type DocumentPluginOptions = {
   storageKey: string
   onChange: (stats: DocumentStats) => void
   onMarkdownChange?: (markdown: string) => void
-  onSaved: () => void
+  onSaved: () => void | Promise<void>
   onSaving: () => void
 }
 
@@ -39,7 +39,7 @@ export const documentPlugin = (
       if (saveTimer !== undefined) window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
         window.localStorage.setItem(options.storageKey, markdown)
-        options.onSaved()
+        void options.onSaved()
       }, 450)
     })
 
