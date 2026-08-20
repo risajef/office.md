@@ -5,6 +5,9 @@ import path from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import {
   isEditableTextFile,
+  imageMimeType,
+  isImageFile,
+  isWorkspaceFile,
   shouldSkipDirectory,
 } from './src/editable-files'
 
@@ -85,10 +88,15 @@ const readWorkspaceFiles = async (root: string, relative = ''): Promise<Array<{
       if (!shouldSkipDirectory(entry.name)) {
         files.push(...await readWorkspaceFiles(root, name))
       }
-    } else if (entry.isFile() && isEditableTextFile(entry.name)) {
+    } else if (
+      entry.isFile() &&
+      (isEditableTextFile(entry.name) || isImageFile(entry.name))
+    ) {
       files.push({
         name,
-        markdown: await fs.readFile(path.join(root, name), 'utf8'),
+        markdown: isImageFile(entry.name)
+          ? ''
+          : await fs.readFile(path.join(root, name), 'utf8'),
       })
     }
   }
@@ -152,6 +160,23 @@ const installFilesystemMiddleware = (
     void (async () => {
       if (request.method === 'GET' && url.pathname === `${API_ROOT}/capabilities`) {
         sendJson(response, 200, { available: true, defaultPath: process.cwd() })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === `${API_ROOT}/asset`) {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const name = url.searchParams.get('name')
+        if (!workspaceId || !name || !isImageFile(name)) {
+          throw new Error('The image path is invalid.')
+        }
+        const root = workspaces.get(workspaceId)
+        if (!root) throw new Error('The folder session expired. Open the folder again.')
+        const target = resolveWorkspaceTarget(root, name)
+        const stats = await fs.stat(target)
+        if (!stats.isFile()) throw new Error('Only files can be loaded as images.')
+        response.statusCode = 200
+        response.setHeader('Content-Type', imageMimeType(name))
+        response.setHeader('Cache-Control', 'no-store')
+        response.end(await fs.readFile(target))
         return
       }
       if (request.method !== 'POST') {
@@ -243,7 +268,7 @@ const installFilesystemMiddleware = (
       }
 
       if (url.pathname === `${API_ROOT}/delete-file`) {
-        if (typeof body.name !== 'string' || !isEditableTextFile(body.name)) {
+        if (typeof body.name !== 'string' || !isWorkspaceFile(body.name)) {
           throw new Error('The file name is invalid.')
         }
         const target = resolveWorkspaceTarget(root, body.name)
@@ -295,8 +320,8 @@ const installFilesystemMiddleware = (
         if (
           typeof body.oldName !== 'string' ||
           typeof body.newName !== 'string' ||
-          !isEditableTextFile(body.oldName) ||
-          !isEditableTextFile(body.newName)
+          !isWorkspaceFile(body.oldName) ||
+          !isWorkspaceFile(body.newName)
         ) {
           throw new Error('The file names are invalid.')
         }

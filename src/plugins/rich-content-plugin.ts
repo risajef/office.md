@@ -21,7 +21,7 @@ import {
   isInTable,
   selectedRect,
 } from '@milkdown/kit/prose/tables'
-import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
+import { codeBlockSchema, imageSchema } from '@milkdown/kit/preset/commonmark'
 import { extendListItemSchemaForTask } from '@milkdown/kit/preset/gfm'
 import { TooltipProvider, tooltipFactory } from '@milkdown/plugin-tooltip'
 import { $view } from '@milkdown/kit/utils'
@@ -50,6 +50,7 @@ type Command =
   | 'code_block'
   | 'formula'
   | 'diagram'
+  | 'image'
 
 type DiagramCommandHandler = (
   view: EditorView,
@@ -60,6 +61,18 @@ let diagramCommandHandler: DiagramCommandHandler | undefined
 /** Connect the editor toolbar to the workspace-aware Mermaid workflow. */
 export const configureDiagramCommand = (handler: DiagramCommandHandler) => {
   diagramCommandHandler = handler
+}
+
+type ImageSourceResolver = (
+  source: string,
+) => string | undefined | Promise<string | undefined>
+
+let imageSourceResolver: ImageSourceResolver | undefined
+
+export const configureImageSourceResolver = (
+  resolver: ImageSourceResolver | undefined,
+) => {
+  imageSourceResolver = resolver
 }
 
 type TableCommand =
@@ -181,6 +194,7 @@ const commands: CommandSpec[] = [
   { icon: 'code-block', title: 'Code block', command: 'code_block', group: 'insert' },
   { icon: 'formula', title: 'Insert LaTeX formula', command: 'formula', group: 'insert' },
   { icon: 'diagram', title: 'Insert Mermaid diagram', command: 'diagram', group: 'insert' },
+  { icon: 'image', title: 'Insert image', command: 'image', group: 'insert' },
 ]
 
 const createButton = (icon: IconName, title: string, command: string) => {
@@ -472,6 +486,77 @@ const applyFormulaBlock = (view: EditorView) => {
   }
 }
 
+const applyImage = async (view: EditorView) => {
+  const image = view.state.schema.nodes.image
+  if (!image) return false
+
+  const source = await requestText({
+    title: 'Insert image',
+    label: 'Image URL or relative path',
+    value: 'https://',
+    submitLabel: 'Next',
+    multiline: false,
+  })
+  if (!source?.trim()) return false
+
+  const alt = await requestText({
+    title: 'Describe image',
+    label: 'Alt text (optional)',
+    submitLabel: 'Insert image',
+    multiline: false,
+  })
+  if (alt === null) return false
+
+  const transaction = view.state.tr.replaceSelectionWith(
+    image.create({ src: source.trim(), alt: alt.trim(), title: '' }),
+  )
+  if (!transaction.docChanged) return false
+  view.dispatch(transaction.scrollIntoView())
+  view.focus()
+  return true
+}
+
+const imageView = $view(
+  imageSchema.node,
+  () => (initialNode) => {
+    const dom = document.createElement('img')
+    let renderToken = 0
+
+    const render = (node: ProseNode) => {
+      const source = String(node.attrs.src ?? '')
+      const token = ++renderToken
+      dom.alt = String(node.attrs.alt ?? '')
+      const title = String(node.attrs.title ?? '')
+      if (title) dom.title = title
+      else dom.removeAttribute('title')
+      dom.src = source
+
+      const resolver = imageSourceResolver
+      if (!resolver || !source) return
+      let resolved: ReturnType<ImageSourceResolver>
+      try {
+        resolved = resolver(source)
+      } catch {
+        return
+      }
+      void Promise.resolve(resolved).then((url) => {
+        if (token === renderToken && url) dom.src = url
+      }).catch(() => undefined)
+    }
+
+    render(initialNode)
+    return {
+      dom,
+      update: (updatedNode: ProseNode) => {
+        if (updatedNode.type !== initialNode.type) return false
+        render(updatedNode)
+        return true
+      },
+      destroy: () => { renderToken += 1 },
+    }
+  },
+)
+
 const applyTable = async (view: EditorView) => {
   const dimensions = await requestText({
     title: 'Insert table',
@@ -578,6 +663,7 @@ const applyCommand = async (view: EditorView, command: Command) => {
   if (command === 'task_list') return applyTaskList(view)
   if (command === 'link') return applyLink(view)
   if (command === 'formula') return applyFormula(view)
+  if (command === 'image') return applyImage(view)
   if (command === 'table') return applyTable(view)
   if (command === 'diagram') return await diagramCommandHandler?.(view) ?? false
   if (command === 'heading1' || command === 'heading2') {
@@ -877,6 +963,7 @@ export const tableContentConfig = (ctx: Ctx) => {
 // plugin. Registering the pair injects the spec used by richContentConfig.
 export const richContentPlugin = [
   taskListItemView,
+  imageView,
   richContentTooltip,
   richContentTooltipPlugin,
   tableTooltip,

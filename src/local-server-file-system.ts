@@ -79,6 +79,9 @@ export const browseLocalServerDirectory = (path: string) =>
 export const reloadLocalServerWorkspace = (workspaceId: string) =>
   post<LocalServerSnapshot>('reload', { workspaceId })
 
+export const getLocalServerAssetUrl = (workspaceId: string, name: string) =>
+  `${API_ROOT}/asset?workspaceId=${encodeURIComponent(workspaceId)}&name=${encodeURIComponent(name)}`
+
 export const writeLocalServerFile = (
   workspaceId: string,
   name: string,

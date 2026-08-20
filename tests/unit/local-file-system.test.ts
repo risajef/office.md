@@ -11,7 +11,12 @@ import {
   type LocalEntryHandle,
   type LocalFileHandle,
 } from '../../src/local-file-system'
-import { isEditableTextFile, shouldSkipDirectory } from '../../src/editable-files'
+import {
+  isEditableTextFile,
+  isImageFile,
+  isWorkspaceFile,
+  shouldSkipDirectory,
+} from '../../src/editable-files'
 
 class MemoryFile implements LocalFileHandle {
   readonly kind = 'file' as const
@@ -87,6 +92,9 @@ describe('editable file filtering', () => {
     expect(isEditableTextFile('photo.png')).toBe(false)
     expect(isEditableTextFile('report.pdf')).toBe(false)
     expect(isEditableTextFile('font.woff2')).toBe(false)
+    expect(isImageFile('photo.png')).toBe(true)
+    expect(isImageFile('private/.photo.png')).toBe(false)
+    expect(isWorkspaceFile('photo.png')).toBe(true)
   })
 
   it('skips generated and dependency directories', () => {
@@ -114,6 +122,11 @@ describe('File System Access operations', () => {
     notes.entriesMap.set('detail.md', new MemoryFile('detail.md', 'Detail'))
     dependencies.entriesMap.set('package.md', new MemoryFile('package.md', 'Skip'))
     hidden.entriesMap.set('secret.md', new MemoryFile('secret.md', 'Skip'))
+
+    const workspace = await readLocalWorkspace(root)
+    expect(workspace.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'image.png', markdown: '' }),
+    ]))
 
     expect(await readLocalTextFiles(root)).toEqual([
       expect.objectContaining({ name: 'notes/detail.md', markdown: 'Detail' }),

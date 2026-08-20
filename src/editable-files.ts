@@ -5,6 +5,24 @@ const WORKSPACE_EXTENSIONS = new Set([
   '.md',
   '.markdown',
 ])
+const IMAGE_EXTENSIONS = new Set([
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.svg',
+  '.tif',
+  '.tiff',
+  '.webp',
+])
+
+const hasVisiblePath = (name: string) => {
+  const parts = name.replaceAll('\\', '/').split('/')
+  return !parts.some((part) => part.startsWith('.'))
+}
 
 const extensionOf = (name: string) => {
   const dot = name.lastIndexOf('.')
@@ -12,9 +30,31 @@ const extensionOf = (name: string) => {
 }
 
 export const isEditableTextFile = (name: string) => {
-  const parts = name.replaceAll('\\', '/').split('/')
-  return !parts.some((part) => part.startsWith('.')) &&
+  return hasVisiblePath(name) &&
     WORKSPACE_EXTENSIONS.has(extensionOf(name))
+}
+
+export const isImageFile = (name: string) =>
+  hasVisiblePath(name) && IMAGE_EXTENSIONS.has(extensionOf(name))
+
+export const isWorkspaceFile = (name: string) =>
+  isEditableTextFile(name) || isImageFile(name)
+
+export const imageMimeType = (name: string) => {
+  const types: Record<string, string> = {
+    '.avif': 'image/avif',
+    '.bmp': 'image/bmp',
+    '.gif': 'image/gif',
+    '.ico': 'image/x-icon',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.webp': 'image/webp',
+  }
+  return types[extensionOf(name)] ?? 'application/octet-stream'
 }
 
 export const shouldSkipDirectory = (name: string) =>

@@ -23,6 +23,7 @@ export type IconName =
   | 'heading-1'
   | 'heading-2'
   | 'include'
+  | 'image'
   | 'info'
   | 'italic'
   | 'link'
@@ -74,6 +75,7 @@ const paths: Record<IconName, string> = {
   'heading-1': '<path d="M4 5v14M12 5v14M4 12h8m5-3 2-1v11m-2 0h4"/>',
   'heading-2': '<path d="M3 5v14M11 5v14M3 12h8m5-2a2.5 2.5 0 1 1 5 0c0 3-5 4-5 9h5"/>',
   include: '<path d="M8 12h8m-4-4v8"/><path d="M7 5H4v14h3m10-14h3v14h-3"/>',
+  image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 5-5 4 4 2-2 5 5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
   italic: '<path d="M10 5h7M7 19h7m1-14L9 19"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/>',

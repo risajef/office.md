@@ -49,6 +49,8 @@ Feb,148,28,=B3+C3
 Mar,176,35,=B4+C4
 `
 
+const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16"><rect width="24" height="16" fill="#d66b4d"/><circle cx="8" cy="7" r="3" fill="#f6d365"/></svg>`
+
 const themeCss = `:root {
   --page-bg: rgb(31, 32, 33);
   --paper: rgb(245, 246, 247);
@@ -73,6 +75,7 @@ const seedWorkspace = async () => {
   await writeFile(path.join(directory, 'included.md'), includedMarkdown)
   await writeFile(path.join(directory, 'data.csv'), csvSource)
   await writeFile(path.join(directory, 'theme.css'), themeCss)
+  await writeFile(path.join(directory, 'sample.svg'), imageSvg)
   await mkdir(path.join(directory, 'empty-folder'))
   return {
     directory,
@@ -182,7 +185,9 @@ base.describe('local filesystem bridge', () => {
     expect(snapshot.files.map((file) => file.name)).toEqual([
       'data.csv',
       'document.md',
+      'image.png',
       'included.md',
+      'sample.svg',
       'theme.css',
     ])
     expect(snapshot.directories).toEqual(['empty-folder'])
@@ -218,7 +223,7 @@ base.describe('local filesystem bridge', () => {
     expect(reload.ok()).toBe(true)
     const reloaded = await reload.json() as { files: Array<{ name: string }> }
     expect(reloaded.files.map((file) => file.name)).toContain('archive/renamed.md')
-    expect(reloaded.files.map((file) => file.name)).not.toContain('image.png')
+    expect(reloaded.files.map((file) => file.name)).toContain('image.png')
     expect(reloaded.files.map((file) => file.name)).not.toContain(
       'node_modules/ignored.md',
     )
@@ -685,6 +690,56 @@ test.describe('rich document behavior', () => {
     await expect(page.locator('.ProseMirror a')).toHaveCount(0)
     await expect(page.locator('#debug-markdown-content')).not.toHaveValue(
       /https:\/\/example\.com/,
+    )
+  })
+
+  test('inserts a standard Markdown image without HTML', async ({ page }) => {
+    const imageButton = page.locator(
+      '.rich-content-toolbar--persistent [data-command="image"]',
+    )
+
+    await imageButton.click()
+    await expect(page.locator('#source-dialog-title')).toHaveText('Insert image')
+    await expect(page.locator('#source-dialog-label')).toHaveText(
+      'Image URL or relative path',
+    )
+    await page.locator('#source-dialog-input').fill('https://example.com/image.png')
+    await page.locator('#source-dialog-submit').click()
+
+    await expect(page.locator('#source-dialog-title')).toHaveText('Describe image')
+    await page.locator('#source-dialog-input').fill('Example image')
+    await page.locator('#source-dialog-submit').click()
+
+    const image = page.locator('.ProseMirror img:not(.ProseMirror-separator)').last()
+    await expect(image).toHaveAttribute('src', 'https://example.com/image.png')
+    await expect(image).toHaveAttribute('alt', 'Example image')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /!\[Example image\]\(https:\/\/example\.com\/image\.png\)/,
+    )
+    await expect(page.locator('#debug-markdown-content')).not.toHaveValue(/<img\b/i)
+  })
+
+  test('shows workspace images and inserts them by drag and drop', async ({ page }) => {
+    const imageRow = page.locator('.file-row[data-file-kind="image"]', {
+      hasText: 'sample.svg',
+    })
+    await expect(imageRow).toBeVisible()
+    await expect(imageRow).toHaveAttribute('draggable', 'true')
+    await expect(imageRow.locator('.file-kind-icon')).toHaveCount(1)
+
+    await imageRow.dragTo(page.locator('.ProseMirror'))
+
+    const image = page.locator('.ProseMirror img:not(.ProseMirror-separator)').last()
+    await expect(image).toHaveAttribute('alt', 'sample.svg')
+    await expect(image).toHaveAttribute('src', /\/__office_md_fs\/asset\?/)
+    await expect.poll(() => image.evaluate(
+      (element) => (element as HTMLImageElement).naturalWidth,
+    )).toBeGreaterThan(0)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /!\[sample\.svg\]\(sample\.svg\)/,
+    )
+    await expect(page.locator('#debug-markdown-content')).not.toHaveValue(
+      /sample\.svg!\[sample\.svg\]\(sample\.svg\)/,
     )
   })
 

@@ -6,6 +6,7 @@ import {
   rootCtx,
   serializerCtx,
 } from '@milkdown/kit/core'
+import { TextSelection } from '@milkdown/kit/prose/state'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { listener } from '@milkdown/kit/plugin/listener'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
@@ -31,6 +32,7 @@ import {
 } from './plugins/latex-plugin'
 import {
   configureDiagramCommand,
+  configureImageSourceResolver,
   richContentConfig,
   richContentPlugin,
   requestText,
@@ -77,6 +79,7 @@ import {
   createLocalServerDirectory,
   deleteLocalServerDirectory,
   deleteLocalServerFile,
+  getLocalServerAssetUrl,
   getLocalServerCapabilities,
   openLocalServerWorkspace,
   renameLocalServerFile,
@@ -85,7 +88,11 @@ import {
   type LocalServerSnapshot,
   type LocalServerWorkspace,
 } from './local-server-file-system'
-import { isEditableTextFile } from './editable-files'
+import {
+  isEditableTextFile,
+  isImageFile,
+  isWorkspaceFile,
+} from './editable-files'
 import jspreadsheet from 'jspreadsheet-ce'
 import 'jspreadsheet-ce/dist/jspreadsheet.css'
 import {
@@ -112,6 +119,7 @@ const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
 const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
 const LOCAL_SERVER_PATH_KEY = 'milkdown-editor-local-server-path-v1'
+const IMAGE_DRAG_MIME = 'application/x-office-md-image'
 
 const isStorageQuotaError = (error: unknown) => {
   if (!error || typeof error !== 'object') return false
@@ -306,7 +314,7 @@ type WorkspaceFile = {
   id: string
   name: string
   markdown: string
-  kind: 'markdown' | 'css' | 'csv'
+  kind: 'markdown' | 'css' | 'csv' | 'image'
   source?: 'browser' | 'folder' | 'server'
   handle?: LocalFileHandle
 }
@@ -389,12 +397,15 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
         ...file,
         markdown:
           file.kind === 'csv' || file.kind === 'css' ||
+          file.kind === 'image' || isImageFile(file.name) ||
           file.name.toLowerCase().endsWith('.csv') ||
           file.name.toLowerCase().endsWith('.css')
             ? file.markdown
             : normalizeMarkdownBreaks(file.markdown),
         kind:
-          file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
+          file.kind === 'image' || isImageFile(file.name)
+            ? 'image' as const
+            : file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
             ? 'csv' as const
             : file.kind === 'css' || file.name.toLowerCase().endsWith('.css')
             ? 'css' as const
@@ -408,6 +419,13 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
 
 const workspaceFiles = readWorkspaceFiles()
 const workspaceDirectories: string[] = []
+const imageObjectUrls = new Map<string, string>()
+
+const clearImageObjectUrls = () => {
+  for (const url of imageObjectUrls.values()) URL.revokeObjectURL(url)
+  imageObjectUrls.clear()
+}
+
 let activeFileId =
   window.localStorage.getItem(ACTIVE_FILE_KEY) ?? workspaceFiles[0]?.id ?? ''
 if (!workspaceFiles.some((file) => file.id === activeFileId)) {
@@ -450,6 +468,7 @@ const runWorkspaceAction = async (action: () => Promise<unknown>) => {
 
 const workspaceKindForName = (name: string): WorkspaceFile['kind'] => {
   const lowerName = name.toLowerCase()
+  if (isImageFile(name)) return 'image'
   if (lowerName.endsWith('.csv')) return 'csv'
   if (lowerName.endsWith('.css')) return 'css'
   return 'markdown'
@@ -492,6 +511,7 @@ const replaceWorkspaceFiles = (
   preferredFileName?: string,
   directories: string[] = [],
 ) => {
+  clearImageObjectUrls()
   evaluatedCsvSources.clear()
   workspaceFiles.splice(0, workspaceFiles.length, ...files)
   workspaceDirectories.splice(0, workspaceDirectories.length, ...directories)
@@ -533,6 +553,7 @@ const findWorkspaceFile = (
 
 const markdownAndCsvKinds = new Set<WorkspaceFile['kind']>(['markdown', 'csv'])
 const csvKinds = new Set<WorkspaceFile['kind']>(['csv'])
+const imageKinds = new Set<WorkspaceFile['kind']>(['image'])
 
 const csvSourceForFile = (file: WorkspaceFile) =>
   evaluatedCsvSources.get(file.id) ?? file.markdown
@@ -549,6 +570,65 @@ const resolveWorkspaceCsv = (fileName: string) => {
   const file = findWorkspaceFile(fileName, csvKinds)
   return file?.kind === 'csv' ? csvSourceForFile(file) : undefined
 }
+
+const resolveWorkspacePath = (documentName: string, reference: string) => {
+  const parts = documentName.split('/').filter(Boolean)
+  parts.pop()
+  for (const part of reference.replaceAll('\\', '/').split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return parts.join('/')
+}
+
+const workspaceImageReference = (source: string) => {
+  const match = source.match(/^([^?#]*)([?#].*)?$/)
+  const rawPath = match?.[1] ?? source
+  if (
+    !rawPath ||
+    rawPath.startsWith('/') ||
+    rawPath.startsWith('//') ||
+    /^[a-z][a-z\d+.-]*:/i.test(rawPath)
+  ) return undefined
+
+  let reference = rawPath
+  try {
+    reference = decodeURIComponent(reference)
+  } catch {
+    // Keep a literal path when a Markdown URL contains an incomplete escape.
+  }
+  const document = activeFile()
+  const requested = document?.kind === 'markdown'
+    ? resolveWorkspacePath(document.name, reference)
+    : reference.replaceAll('\\', '/')
+  const file = workspaceFiles.find(
+    (candidate) => candidate.kind === 'image' && candidate.name === requested,
+  ) ?? findWorkspaceFile(reference, imageKinds)
+  return file ? { file, suffix: match?.[2] ?? '' } : undefined
+}
+
+const resolveWorkspaceImageSource = async (source: string) => {
+  const reference = workspaceImageReference(source)
+  if (!reference) return undefined
+  const { file, suffix } = reference
+
+  if (file.source === 'server' && selectedServerWorkspace) {
+    return `${getLocalServerAssetUrl(selectedServerWorkspace.id, file.name)}${suffix}`
+  }
+
+  if (file.source !== 'folder') return undefined
+  let objectUrl = imageObjectUrls.get(file.id)
+  if (!objectUrl) {
+    const handle = await resolveLocalFileHandle(file)
+    if (!handle) return undefined
+    objectUrl = URL.createObjectURL(await handle.getFile())
+    imageObjectUrls.set(file.id, objectUrl)
+  }
+  return `${objectUrl}${suffix}`
+}
+
+configureImageSourceResolver(resolveWorkspaceImageSource)
 
 configureMarkdownIncludes(resolveWorkspaceInclude)
 configureMermaidCsvResolver(resolveWorkspaceCsv)
@@ -666,7 +746,7 @@ const normalizedRenameName = (requestedName: string, file: WorkspaceFile) => {
 
   const currentExtension = fileExtension(file.name)
   if (currentExtension && !fileExtension(name)) name += currentExtension
-  if (!isEditableTextFile(name)) throw new Error('That file type is not editable.')
+  if (!isWorkspaceFile(name)) throw new Error('That file type is not editable.')
   if (workspaceKindForName(name) !== file.kind) {
     throw new Error(`Keep the ${currentExtension || file.kind} file type when renaming.`)
   }
@@ -889,6 +969,148 @@ const addMarkdownInclude = (editor: EditorInstance, file: WorkspaceFile) => {
   })
 }
 
+const relativeWorkspaceImagePath = (
+  documentName: string,
+  imageName: string,
+) => {
+  const documentParts = documentName.split('/').filter(Boolean)
+  documentParts.pop()
+  const imageParts = imageName.split('/').filter(Boolean)
+  let common = 0
+  while (
+    common < documentParts.length &&
+    common < imageParts.length &&
+    documentParts[common] === imageParts[common]
+  ) common += 1
+  return [
+    ...Array.from({ length: documentParts.length - common }, () => '..'),
+    ...imageParts.slice(common),
+  ].join('/')
+}
+
+const insertImageNode = (
+  editor: EditorInstance,
+  source: string,
+  alt: string,
+  position?: number,
+) => {
+  const inserted = editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    if (!view.editable) return false
+    const image = view.state.schema.nodes.image
+    if (!image) return false
+
+    let transaction = view.state.tr
+    if (position !== undefined) {
+      transaction = transaction.setSelection(
+        TextSelection.near(view.state.doc.resolve(position)),
+      )
+    }
+    transaction = transaction.replaceSelectionWith(
+      image.create({ src: source, alt, title: '' }),
+    )
+    if (!transaction.docChanged) return false
+    view.dispatch(transaction.scrollIntoView())
+    view.focus()
+    return true
+  })
+  if (inserted) setStatus(`Inserted ${alt}`, 'saved')
+  return inserted
+}
+
+const addWorkspaceImage = (
+  editor: EditorInstance,
+  file: WorkspaceFile,
+  position?: number,
+) => {
+  if (file.kind !== 'image') return false
+  const target = activeFile()?.kind === 'markdown'
+    ? activeFile()
+    : markdownTargetForCsvAction(editor)
+  if (!target || target.kind !== 'markdown') {
+    setStatus('Create a Markdown file first', 'ready')
+    return false
+  }
+  const source = relativeWorkspaceImagePath(target.name, file.name)
+  const alt = file.name.split('/').at(-1) ?? file.name
+  return insertImageNode(editor, source, alt, position)
+}
+
+const readImageFileAsDataUrl = (file: File) => new Promise<string>(
+  (resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('Could not read the dropped image.'))
+    })
+    reader.addEventListener('error', () => {
+      reject(reader.error ?? new Error('Could not read the dropped image.'))
+    })
+    reader.readAsDataURL(file)
+  },
+)
+
+const configureImageDrop = (editor: EditorInstance) => {
+  if (!editorRoot) return () => undefined
+
+  const clearDropState = () => {
+    editorRoot?.classList.remove('is-image-drop-target')
+  }
+  const onDragOver = (event: DragEvent) => {
+    const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
+    if (!types.includes(IMAGE_DRAG_MIME) && !types.includes('Files')) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    editorRoot.classList.add('is-image-drop-target')
+  }
+  const onDragLeave = (event: DragEvent) => {
+    if (event.relatedTarget instanceof Node && editorRoot.contains(event.relatedTarget)) return
+    clearDropState()
+  }
+  const onDrop = (event: DragEvent) => {
+    const transfer = event.dataTransfer
+    if (!transfer) return
+    const fileId = transfer.getData(IMAGE_DRAG_MIME)
+    const droppedFile = transfer.files[0]
+    const hasImageFile = droppedFile?.type.startsWith('image/') === true
+    if (!fileId && !hasImageFile) return
+
+    event.preventDefault()
+    clearDropState()
+    const position = editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      return view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos
+    })
+
+    if (fileId) {
+      const file = workspaceFiles.find(
+        (candidate) => candidate.id === fileId && candidate.kind === 'image',
+      )
+      if (file) addWorkspaceImage(editor, file, position)
+      return
+    }
+
+    void readImageFileAsDataUrl(droppedFile).then((source) => {
+      insertImageNode(
+        editor,
+        source,
+        droppedFile.name,
+        position,
+      )
+    }).catch(() => setStatus('Could not read the dropped image', 'ready'))
+  }
+
+  editorRoot.addEventListener('dragover', onDragOver)
+  editorRoot.addEventListener('dragleave', onDragLeave)
+  editorRoot.addEventListener('drop', onDrop, true)
+  return () => {
+    editorRoot.removeEventListener('dragover', onDragOver)
+    editorRoot.removeEventListener('dragleave', onDragLeave)
+    editorRoot.removeEventListener('drop', onDrop, true)
+    clearDropState()
+  }
+}
+
 const renderFileList = (editor: EditorInstance) => {
   if (!fileListElement) return
   fileListElement.replaceChildren()
@@ -948,20 +1170,42 @@ const renderFileList = (editor: EditorInstance) => {
     openButton.type = 'button'
     openButton.className = 'file-select'
     const kindIcon = createIcon(
-      file.kind === 'csv' ? 'sheet' : file.kind === 'css' ? 'code' : 'file-text',
+      file.kind === 'csv'
+        ? 'sheet'
+        : file.kind === 'css'
+          ? 'code'
+          : file.kind === 'image'
+            ? 'image'
+            : 'file-text',
     )
     kindIcon.classList.add('file-kind-icon')
     const fileLabel = document.createElement('span')
     fileLabel.className = 'file-select-label'
     fileLabel.textContent = file.name.split('/').at(-1) ?? file.name
     openButton.append(kindIcon, fileLabel)
-    openButton.title =
-      file.kind === 'css' ? `Apply ${file.name}` : `Open ${file.name}`
+    openButton.title = file.kind === 'css'
+      ? `Apply ${file.name}`
+      : file.kind === 'image'
+        ? `Insert ${file.name}`
+        : `Open ${file.name}`
     if (file.id === activeFileId) openButton.setAttribute('aria-current', 'page')
     openButton.addEventListener('click', () => {
       if (file.kind === 'css') applyCssFile(file)
+      else if (file.kind === 'image') addWorkspaceImage(editor, file)
       else openFile(editor, file.id)
     })
+
+    if (file.kind === 'image') {
+      item.draggable = true
+      item.addEventListener('dragstart', (event) => {
+        if (!event.dataTransfer) return
+        event.dataTransfer.effectAllowed = 'copy'
+        event.dataTransfer.setData(IMAGE_DRAG_MIME, file.id)
+        event.dataTransfer.setData('text/plain', file.name)
+        item.classList.add('is-dragging')
+      })
+      item.addEventListener('dragend', () => item.classList.remove('is-dragging'))
+    }
 
     const actions = document.createElement('div')
     actions.className = 'file-actions'
@@ -993,18 +1237,20 @@ const renderFileList = (editor: EditorInstance) => {
       actions.append(injectButton)
     }
 
-    const renameButton = document.createElement('button')
-    renameButton.type = 'button'
-    renameButton.className = 'file-action file-action-icon'
-    setIcon(renameButton, 'edit')
-    renameButton.title = `Rename ${file.name}`
-    renameButton.setAttribute('aria-label', `Rename ${file.name}`)
-    renameButton.dataset.tooltip = renameButton.title
-    renameButton.addEventListener('click', () => {
-      void runWorkspaceAction(() => renameFile(editor, file.id))
-    })
+    if (file.kind !== 'image') {
+      const renameButton = document.createElement('button')
+      renameButton.type = 'button'
+      renameButton.className = 'file-action file-action-icon'
+      setIcon(renameButton, 'edit')
+      renameButton.title = `Rename ${file.name}`
+      renameButton.setAttribute('aria-label', `Rename ${file.name}`)
+      renameButton.dataset.tooltip = renameButton.title
+      renameButton.addEventListener('click', () => {
+        void runWorkspaceAction(() => renameFile(editor, file.id))
+      })
 
-    actions.append(renameButton)
+      actions.append(renameButton)
+    }
     const deleteButton = document.createElement('button')
     deleteButton.type = 'button'
     deleteButton.className = 'file-action file-action-icon'
@@ -2855,6 +3101,7 @@ const startEditor = async () => {
 
   editorInstance = editor
   workspaceEditor = editor
+  const cleanupImageDrop = configureImageDrop(editor)
   configureDiagramCommand(() => addMermaidDiagram(editor))
   if (currentMarkdownFile) {
     cleanMarkdownByFile.set(currentMarkdownFile.id, getMarkdown(editor))
@@ -3055,6 +3302,7 @@ const startEditor = async () => {
     if (file && isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
       void saveDiskFile(file)
     }
+    cleanupImageDrop()
     csvContextToolbar.destroy()
     editor.destroy()
   })

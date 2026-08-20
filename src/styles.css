@@ -742,6 +742,17 @@ h1 em {
   cursor: pointer;
 }
 
+#editor .ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#editor.is-image-drop-target .ProseMirror {
+  outline: 2px dashed var(--accent);
+  outline-offset: 8px;
+}
+
 #editor .ProseMirror blockquote {
   margin: 30px 0;
   padding: 5px 0 5px 21px;
@@ -1689,6 +1700,14 @@ h1 em {
 
 .file-row.is-active {
   background: var(--accent-soft);
+}
+
+.file-row[draggable="true"] .file-select {
+  cursor: grab;
+}
+
+.file-row.is-dragging {
+  opacity: 0.55;
 }
 
 .file-row[data-file-kind="css"] .file-select {

@@ -1,4 +1,8 @@
-import { isEditableTextFile, shouldSkipDirectory } from './editable-files'
+import {
+  isEditableTextFile,
+  isImageFile,
+  shouldSkipDirectory,
+} from './editable-files'
 
 export type LocalWritable = {
   write: (contents: string) => Promise<void>
@@ -194,11 +198,12 @@ export const readLocalWorkspace = async (
       continue
     }
 
-    if (!isEditableTextFile(name)) continue
+    const image = isImageFile(name)
+    if (!isEditableTextFile(name) && !image) continue
     const file = await entry.getFile()
     files.push({
       name: `${prefix}${name}`,
-      markdown: await file.text(),
+      markdown: image ? '' : await file.text(),
       handle: entry,
     })
   }
@@ -212,7 +217,9 @@ export const readLocalWorkspace = async (
 export const readLocalTextFiles = async (
   directory: LocalDirectoryHandle,
   prefix = '',
-) => (await readLocalWorkspace(directory, prefix)).files
+) => (await readLocalWorkspace(directory, prefix)).files.filter(
+  (file) => isEditableTextFile(file.name),
+)
 
 export const writeLocalTextFile = async (
   file: LocalTextFile | { handle: LocalFileHandle; markdown: string },
