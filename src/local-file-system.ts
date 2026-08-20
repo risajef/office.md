@@ -58,6 +58,11 @@ export type LocalTextFile = {
   handle: LocalFileHandle
 }
 
+export type LocalWorkspace = {
+  files: LocalTextFile[]
+  directories: string[]
+}
+
 export const pickLocalDirectory = async () => {
   const picker = (window as DirectoryPickerWindow).showDirectoryPicker
   if (!picker) {
@@ -171,16 +176,21 @@ export const restoreLocalDirectory = async () => {
   }
 }
 
-export const readLocalTextFiles = async (
+export const readLocalWorkspace = async (
   directory: LocalDirectoryHandle,
   prefix = '',
-): Promise<LocalTextFile[]> => {
+): Promise<LocalWorkspace> => {
   const files: LocalTextFile[] = []
+  const directories: string[] = []
 
   for await (const [name, entry] of directory.entries()) {
     if (entry.kind === 'directory') {
       if (shouldSkipDirectory(name)) continue
-      files.push(...(await readLocalTextFiles(entry, `${prefix}${name}/`)))
+      const childPrefix = `${prefix}${name}/`
+      directories.push(`${prefix}${name}`)
+      const child = await readLocalWorkspace(entry, childPrefix)
+      files.push(...child.files)
+      directories.push(...child.directories)
       continue
     }
 
@@ -193,8 +203,16 @@ export const readLocalTextFiles = async (
     })
   }
 
-  return files.sort((left, right) => left.name.localeCompare(right.name))
+  return {
+    files: files.sort((left, right) => left.name.localeCompare(right.name)),
+    directories: directories.sort((left, right) => left.localeCompare(right)),
+  }
 }
+
+export const readLocalTextFiles = async (
+  directory: LocalDirectoryHandle,
+  prefix = '',
+) => (await readLocalWorkspace(directory, prefix)).files
 
 export const writeLocalTextFile = async (
   file: LocalTextFile | { handle: LocalFileHandle; markdown: string },
@@ -243,6 +261,62 @@ const hasLocalEntry = async (directory: LocalDirectoryHandle, name: string) => {
     if (entryName === name) return true
   }
   return false
+}
+
+const visibleLocalPathParts = (name: string) => {
+  const parts = localPathParts(name)
+  if (parts.some((part) => part.startsWith('.'))) {
+    throw new Error('The folder path is invalid.')
+  }
+  return parts
+}
+
+export const createLocalDirectory = async (
+  root: LocalDirectoryHandle,
+  name: string,
+) => {
+  const parts = visibleLocalPathParts(name)
+  const parent = await localParentDirectory(root, parts, false)
+  if (!parent.getDirectoryHandle) {
+    throw new Error('This browser cannot create folders here.')
+  }
+  const baseName = parts.at(-1) as string
+  if (await hasLocalEntry(parent, baseName)) {
+    throw new Error(`An entry named ${name} already exists.`)
+  }
+  await parent.getDirectoryHandle(baseName, { create: true })
+}
+
+export const deleteLocalTextFile = async (
+  root: LocalDirectoryHandle,
+  name: string,
+) => {
+  const parts = localPathParts(name)
+  const parent = await localParentDirectory(root, parts, false)
+  if (!parent.getFileHandle || !parent.removeEntry) {
+    throw new Error('This browser cannot delete files here.')
+  }
+  const baseName = parts.at(-1) as string
+  const file = await parent.getFileHandle(baseName)
+  if (file.kind !== 'file') throw new Error('Only files can be deleted.')
+  await parent.removeEntry(baseName)
+}
+
+export const deleteLocalDirectory = async (
+  root: LocalDirectoryHandle,
+  name: string,
+) => {
+  const parts = visibleLocalPathParts(name)
+  const parent = await localParentDirectory(root, parts, false)
+  if (!parent.getDirectoryHandle || !parent.removeEntry) {
+    throw new Error('This browser cannot delete folders here.')
+  }
+  const baseName = parts.at(-1) as string
+  const directory = await parent.getDirectoryHandle(baseName)
+  for await (const _entry of directory.entries()) {
+    throw new Error('The folder must be empty before it can be deleted.')
+  }
+  await parent.removeEntry(baseName)
 }
 
 /**

@@ -73,6 +73,7 @@ const seedWorkspace = async () => {
   await writeFile(path.join(directory, 'included.md'), includedMarkdown)
   await writeFile(path.join(directory, 'data.csv'), csvSource)
   await writeFile(path.join(directory, 'theme.css'), themeCss)
+  await mkdir(path.join(directory, 'empty-folder'))
   return {
     directory,
     file: (name: string) => path.join(directory, name),
@@ -146,6 +147,10 @@ base.describe('local filesystem bridge', () => {
     workspace = await seedWorkspace()
     await mkdir(workspace.file('node_modules'))
     await writeFile(workspace.file('node_modules/ignored.md'), 'ignored')
+    await mkdir(workspace.file('.hidden-folder'))
+    await writeFile(workspace.file('.hidden-folder/ignored.md'), 'ignored')
+    await writeFile(workspace.file('.hidden.md'), 'ignored')
+    await writeFile(workspace.file('notes.txt'), 'ignored')
     await writeFile(workspace.file('image.png'), 'not really an image')
   })
 
@@ -164,6 +169,7 @@ base.describe('local filesystem bridge', () => {
     return response.json() as Promise<{
       workspace: { id: string; path: string }
       files: Array<{ name: string; markdown: string }>
+      directories: string[]
     }>
   }
 
@@ -179,6 +185,7 @@ base.describe('local filesystem bridge', () => {
       'included.md',
       'theme.css',
     ])
+    expect(snapshot.directories).toEqual(['empty-folder'])
 
     const write = await request.post('/__office_md_fs/write', {
       data: {
@@ -217,6 +224,22 @@ base.describe('local filesystem bridge', () => {
     )
   })
 
+  base('loads a folder when the workspace cache exceeds browser storage', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const originalSetItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === 'milkdown-editor-files-v4') {
+          throw new DOMException('Quota exceeded', 'QuotaExceededError')
+        }
+        originalSetItem.call(this, key, value)
+      }
+    })
+
+    await openWorkspace(page, workspace.directory)
+  })
+
   base('rejects overwrite and path escape attempts without damaging files', async ({
     request,
   }) => {
@@ -242,6 +265,46 @@ base.describe('local filesystem bridge', () => {
       },
     })
     expect(escape.status()).toBe(400)
+  })
+
+  base('creates and deletes files and empty folders through the bridge', async ({
+    request,
+  }) => {
+    const snapshot = await openThroughApi(request, workspace.directory)
+    const folder = await request.post('/__office_md_fs/mkdir', {
+      data: { workspaceId: snapshot.workspace.id, name: 'created-folder' },
+    })
+    expect(folder.ok()).toBe(true)
+    await expect(access(workspace.file('created-folder'))).resolves.toBeUndefined()
+
+    const nonEmpty = await request.post('/__office_md_fs/mkdir', {
+      data: { workspaceId: snapshot.workspace.id, name: 'non-empty' },
+    })
+    expect(nonEmpty.ok()).toBe(true)
+    const nestedFile = await request.post('/__office_md_fs/write', {
+      data: {
+        workspaceId: snapshot.workspace.id,
+        name: 'non-empty/inside.md',
+        markdown: 'inside',
+      },
+    })
+    expect(nestedFile.ok()).toBe(true)
+    const rejectedDelete = await request.post('/__office_md_fs/delete-directory', {
+      data: { workspaceId: snapshot.workspace.id, name: 'non-empty' },
+    })
+    expect(rejectedDelete.status()).toBe(400)
+
+    const deletedFile = await request.post('/__office_md_fs/delete-file', {
+      data: { workspaceId: snapshot.workspace.id, name: 'document.md' },
+    })
+    expect(deletedFile.ok()).toBe(true)
+    await expect(access(workspace.file('document.md'))).rejects.toThrow()
+
+    const deletedFolder = await request.post('/__office_md_fs/delete-directory', {
+      data: { workspaceId: snapshot.workspace.id, name: 'created-folder' },
+    })
+    expect(deletedFolder.ok()).toBe(true)
+    await expect(access(workspace.file('created-folder'))).rejects.toThrow()
   })
 })
 
@@ -298,8 +361,10 @@ test.describe('disk-backed editor workflows', () => {
     await expect(page.locator('#document-name')).toHaveText('renamed.md')
 
     await page.locator('#new-file').click()
+    await page.getByRole('option', { name: /Markdown document/ }).click()
+    await expect(page.locator('#source-dialog-input')).toHaveValue('untitled')
     await page.locator('#source-dialog-input').fill('new-notes')
-    await page.locator('#source-dialog-submit').click()
+    await page.locator('#source-dialog-input').press('Enter')
     await expect(page.locator('#document-name')).toHaveText('new-notes.md')
     await expect(page).toHaveTitle('new-notes.md')
     await expect.poll(() => readFile(workspace.file('new-notes.md'), 'utf8')).toContain(
@@ -311,6 +376,32 @@ test.describe('disk-backed editor workflows', () => {
     await expect.poll(() => readFile(workspace.file('new-notes.md'), 'utf8')).toContain(
       'Stored content.',
     )
+
+    await page.locator('#new-file').click()
+    await page.getByRole('option', { name: /CSV spreadsheet/ }).click()
+    await page.locator('#source-dialog-input').fill('new-data')
+    await page.locator('#source-dialog-input').press('Enter')
+    await expect(page.locator('#csv-editor-card')).toBeVisible()
+    await expect(page.locator('#csv-editor-name')).toHaveText('new-data.csv')
+    await expect(page).toHaveTitle('new-data.csv')
+    await expect.poll(() => readFile(workspace.file('new-data.csv'), 'utf8')).toBe('')
+
+    await page.locator('#new-folder').click()
+    await page.locator('#source-dialog-input').fill('created-folder')
+    await page.locator('#source-dialog-input').press('Enter')
+    await expect(page.locator('.folder-label', { hasText: 'created-folder' })).toHaveText(
+      'created-folder',
+    )
+    await expect(access(workspace.file('created-folder'))).resolves.toBeUndefined()
+    await page.getByRole('button', { name: 'Delete created-folder' }).click()
+    await page.getByRole('option', { name: 'Delete' }).click()
+    await expect(access(workspace.file('created-folder'))).rejects.toThrow()
+    await expect(page.locator('.folder-label', { hasText: 'created-folder' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Delete new-data.csv' }).click()
+    await page.getByRole('option', { name: 'Delete' }).click()
+    await expect(access(workspace.file('new-data.csv'))).rejects.toThrow()
+    await expect(page.locator('#document-name')).toHaveText('new-notes.md')
   })
 
   test('edits formulas and rows, stores source CSV, exports evaluated CSV, and renames it', async ({

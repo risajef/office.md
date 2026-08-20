@@ -97,6 +97,13 @@ const readWorkspaceFiles = async (root: string, relative = ''): Promise<Array<{
 
 const resolveWorkspaceTarget = (root: string, name: string) => {
   const normalizedName = name.replaceAll('\\', '/')
+  const parts = normalizedName.split('/')
+  if (
+    !normalizedName ||
+    parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))
+  ) {
+    throw new Error('The path is invalid.')
+  }
   const target = path.resolve(root, normalizedName)
   const relative = path.relative(root, target)
   if (
@@ -108,6 +115,18 @@ const resolveWorkspaceTarget = (root: string, name: string) => {
     throw new Error('The file path must stay inside the open folder.')
   }
   return target
+}
+
+const readWorkspaceDirectories = async (root: string, relative = ''): Promise<string[]> => {
+  const directory = path.join(root, relative)
+  const directories: string[] = []
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory() || shouldSkipDirectory(entry.name)) continue
+    const name = relative ? `${relative}/${entry.name}` : entry.name
+    directories.push(name)
+    directories.push(...await readWorkspaceDirectories(root, name))
+  }
+  return directories.sort((left, right) => left.localeCompare(right))
 }
 
 const installFilesystemMiddleware = (
@@ -179,6 +198,7 @@ const installFilesystemMiddleware = (
         sendJson(response, 200, {
           workspace,
           files: await readWorkspaceFiles(root),
+          directories: await readWorkspaceDirectories(root),
         })
         return
       }
@@ -197,7 +217,53 @@ const installFilesystemMiddleware = (
             name: path.basename(root) || root,
           },
           files: await readWorkspaceFiles(root),
+          directories: await readWorkspaceDirectories(root),
         })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/mkdir`) {
+        if (typeof body.name !== 'string') throw new Error('The folder path is invalid.')
+        const target = resolveWorkspaceTarget(root, body.name)
+        try {
+          await fs.access(target)
+          throw new Error(`An entry named ${body.name} already exists.`)
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !('code' in error) ||
+            error.code !== 'ENOENT'
+          ) {
+            throw error
+          }
+        }
+        await fs.mkdir(target)
+        sendJson(response, 200, { ok: true })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/delete-file`) {
+        if (typeof body.name !== 'string' || !isEditableTextFile(body.name)) {
+          throw new Error('The file name is invalid.')
+        }
+        const target = resolveWorkspaceTarget(root, body.name)
+        const stats = await fs.stat(target)
+        if (!stats.isFile()) throw new Error('Only files can be deleted.')
+        await fs.unlink(target)
+        sendJson(response, 200, { ok: true })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/delete-directory`) {
+        if (typeof body.name !== 'string') throw new Error('The folder path is invalid.')
+        const target = resolveWorkspaceTarget(root, body.name)
+        const stats = await fs.stat(target)
+        if (!stats.isDirectory()) throw new Error('Only folders can be deleted.')
+        if ((await fs.readdir(target)).length) {
+          throw new Error('The folder must be empty before it can be deleted.')
+        }
+        await fs.rmdir(target)
+        sendJson(response, 200, { ok: true })
         return
       }
 

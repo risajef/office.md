@@ -128,6 +128,9 @@ export const requestText = (
       if (event.key === 'Escape') {
         event.preventDefault()
         finish(null)
+      } else if (options.multiline === false && event.key === 'Enter') {
+        event.preventDefault()
+        finish(input.value)
       } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault()
         finish(input.value)

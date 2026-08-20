@@ -10,7 +10,9 @@ office.md is a local-first Markdown and CSV editor built with Milkdown. It treat
 - Live Markdown and CSV includes.
 - CSV-backed Mermaid diagrams, including `xychart-beta` row and column ranges.
 - Document-only CSS themes, including document, code, heading, and Mermaid fonts.
-- Disk-backed folder projects when running locally, with explicit Store, Reload, Rename, and New File actions.
+- Create new Markdown documents and CSV spreadsheets from the Files panel.
+- Create folders and delete supported files or empty folders from disk-backed projects.
+- Disk-backed folder projects when running locally, with explicit Store, Reload, Rename, New File, and New Folder actions.
 - Portable Markdown, evaluated CSV, standalone HTML, and print-to-PDF export.
 
 ## Run locally
@@ -32,9 +34,11 @@ C:\Users\me\project
 \\wsl$\Ubuntu\home\me\project
 ```
 
-The bridge reads and writes real files below the selected folder. Binary files, `.git`, `node_modules`, and `dist` are ignored. When the app is hosted without the local Vite bridge, it falls back to the browser File System Access API where supported.
+The bridge reads and writes `.md`, `.markdown`, `.css`, and `.csv` files below the selected folder. Hidden files and directories, binary files, `.git`, `node_modules`, and `dist` are ignored. When the app is hosted without the local Vite bridge, it falls back to the browser File System Access API where supported.
 
 Edits are kept in browser state until **Store** is clicked. **Reload** discards cached project data and reads the folder again from disk.
+
+Use **New Folder** to create a visible folder inside the open workspace. The trash actions in the Files panel delete supported files and empty folders; folders containing files must be emptied first.
 
 ## Project syntax
 

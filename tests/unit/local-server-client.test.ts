@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   browseLocalServerDirectory,
+  createLocalServerDirectory,
+  deleteLocalServerDirectory,
+  deleteLocalServerFile,
   getLocalServerCapabilities,
   openLocalServerWorkspace,
   reloadLocalServerWorkspace,
@@ -26,6 +29,9 @@ describe('local server filesystem client', () => {
     await reloadLocalServerWorkspace('workspace')
     await openLocalServerWorkspace('/tmp/project')
     await browseLocalServerDirectory('/tmp')
+    await createLocalServerDirectory('workspace', 'new-folder')
+    await deleteLocalServerFile('workspace', 'notes.md')
+    await deleteLocalServerDirectory('workspace', 'new-folder')
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       '/__office_md_fs/write',
@@ -33,6 +39,9 @@ describe('local server filesystem client', () => {
       '/__office_md_fs/reload',
       '/__office_md_fs/open',
       '/__office_md_fs/browse',
+      '/__office_md_fs/mkdir',
+      '/__office_md_fs/delete-file',
+      '/__office_md_fs/delete-directory',
     ])
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       workspaceId: 'workspace',
@@ -43,6 +52,10 @@ describe('local server filesystem client', () => {
       workspaceId: 'workspace',
       oldName: 'notes.md',
       newName: 'renamed.md',
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[5][1]?.body))).toEqual({
+      workspaceId: 'workspace',
+      name: 'new-folder',
     })
   })
 

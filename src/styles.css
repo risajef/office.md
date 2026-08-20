@@ -1487,6 +1487,12 @@ h1 em {
   border-bottom: 1px solid var(--line);
 }
 
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .sidebar-heading h2 {
   margin: 0;
   color: var(--muted);
@@ -1518,6 +1524,11 @@ h1 em {
 .file-action:focus-visible {
   background: var(--accent-soft);
   outline: none;
+}
+
+.sidebar-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 .folder-actions {
@@ -1611,8 +1622,16 @@ h1 em {
   list-style: none;
 }
 
+.folder-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
 .folder-toggle {
   display: flex;
+  min-width: 0;
+  flex: 1;
   width: 100%;
   align-items: center;
   gap: 5px;

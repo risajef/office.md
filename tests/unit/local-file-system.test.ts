@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createLocalDirectory,
+  deleteLocalDirectory,
+  deleteLocalTextFile,
+  readLocalWorkspace,
   readLocalTextFiles,
   renameLocalTextFile,
   writeLocalTextFile,
@@ -72,10 +76,14 @@ class MemoryDirectory implements LocalDirectoryHandle {
 }
 
 describe('editable file filtering', () => {
-  it('accepts text-oriented files and rejects known binary formats', () => {
+  it('accepts supported workspace files and rejects other formats', () => {
     expect(isEditableTextFile('README.md')).toBe(true)
+    expect(isEditableTextFile('README.markdown')).toBe(true)
     expect(isEditableTextFile('data.csv')).toBe(true)
     expect(isEditableTextFile('theme.css')).toBe(true)
+    expect(isEditableTextFile('notes.txt')).toBe(false)
+    expect(isEditableTextFile('.secret.md')).toBe(false)
+    expect(isEditableTextFile('private/.secret.md')).toBe(false)
     expect(isEditableTextFile('photo.png')).toBe(false)
     expect(isEditableTextFile('report.pdf')).toBe(false)
     expect(isEditableTextFile('font.woff2')).toBe(false)
@@ -85,6 +93,7 @@ describe('editable file filtering', () => {
     expect(shouldSkipDirectory('.git')).toBe(true)
     expect(shouldSkipDirectory('node_modules')).toBe(true)
     expect(shouldSkipDirectory('dist')).toBe(true)
+    expect(shouldSkipDirectory('.cache')).toBe(true)
     expect(shouldSkipDirectory('notes')).toBe(false)
   })
 })
@@ -94,17 +103,49 @@ describe('File System Access operations', () => {
     const root = new MemoryDirectory('project')
     const notes = new MemoryDirectory('notes')
     const dependencies = new MemoryDirectory('node_modules')
+    const hidden = new MemoryDirectory('.hidden')
     root.entriesMap.set('README.md', new MemoryFile('README.md', '# Read me'))
+    root.entriesMap.set('.secret.md', new MemoryFile('.secret.md', 'hidden'))
+    root.entriesMap.set('notes.txt', new MemoryFile('notes.txt', 'unsupported'))
     root.entriesMap.set('image.png', new MemoryFile('image.png', 'binary'))
     root.entriesMap.set('notes', notes)
     root.entriesMap.set('node_modules', dependencies)
+    root.entriesMap.set('.hidden', hidden)
     notes.entriesMap.set('detail.md', new MemoryFile('detail.md', 'Detail'))
     dependencies.entriesMap.set('package.md', new MemoryFile('package.md', 'Skip'))
+    hidden.entriesMap.set('secret.md', new MemoryFile('secret.md', 'Skip'))
 
     expect(await readLocalTextFiles(root)).toEqual([
       expect.objectContaining({ name: 'notes/detail.md', markdown: 'Detail' }),
       expect.objectContaining({ name: 'README.md', markdown: '# Read me' }),
     ])
+  })
+
+  it('lists directories and creates or deletes empty entries', async () => {
+    const root = new MemoryDirectory('project')
+    const empty = new MemoryDirectory('empty')
+    root.entriesMap.set('empty', empty)
+    root.entriesMap.set('notes.md', new MemoryFile('notes.md', 'Notes'))
+
+    const workspace = await readLocalWorkspace(root)
+    expect(workspace.directories).toEqual(['empty'])
+
+    await createLocalDirectory(root, 'created')
+    expect(root.entriesMap.get('created')?.kind).toBe('directory')
+    await deleteLocalDirectory(root, 'created')
+    expect(root.entriesMap.has('created')).toBe(false)
+    await deleteLocalTextFile(root, 'notes.md')
+    expect(root.entriesMap.has('notes.md')).toBe(false)
+    await expect(deleteLocalDirectory(root, 'empty')).resolves.toBeUndefined()
+  })
+
+  it('refuses to delete non-empty folders', async () => {
+    const root = new MemoryDirectory('project')
+    const notes = new MemoryDirectory('notes')
+    notes.entriesMap.set('detail.md', new MemoryFile('detail.md', 'Detail'))
+    root.entriesMap.set('notes', notes)
+
+    await expect(deleteLocalDirectory(root, 'notes')).rejects.toThrow('must be empty')
   })
 
   it('writes and closes a permitted file', async () => {

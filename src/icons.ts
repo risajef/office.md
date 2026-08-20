@@ -45,6 +45,7 @@ export type IconName =
   | 'sort-descending'
   | 'strikethrough'
   | 'table'
+  | 'trash'
   | 'undo'
   | 'up'
 
@@ -95,6 +96,7 @@ const paths: Record<IconName, string> = {
   'sort-descending': '<path d="M8 5v13m-4-4 4 4 4-4M15 8h3m-3 4h4m-4 4h5"/>',
   strikethrough: '<path d="M17 7a5 5 0 0 0-9-1c-1 2 0 4 2 5m2 2c3 1 5 2 4 5-1 2-6 2-9-1M4 12h16"/>',
   table: '<rect x="3" y="4" width="18" height="16"/><path d="M3 9h18M9 4v16m6-16v16"/>',
+  trash: '<path d="M4 7h16m-10 0V4h6v3m-8 4v6m4-6v6m-7-10 1 16h12l1-16"/>',
   undo: '<path d="m8 7-4 4 4 4"/><path d="M4 11h9a7 7 0 0 1 7 7"/>',
   up: '<path d="m6 10 6-6 6 6M12 4v16"/>',
 }

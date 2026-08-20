@@ -14,6 +14,7 @@ export type LocalServerWorkspace = {
 export type LocalServerSnapshot = {
   workspace: LocalServerWorkspace
   files: LocalServerFile[]
+  directories: string[]
 }
 
 export type LocalServerCapabilities = {
@@ -89,3 +90,18 @@ export const renameLocalServerFile = (
   oldName: string,
   newName: string,
 ) => post<{ ok: true }>('rename', { workspaceId, oldName, newName })
+
+export const createLocalServerDirectory = (
+  workspaceId: string,
+  name: string,
+) => post<{ ok: true }>('mkdir', { workspaceId, name })
+
+export const deleteLocalServerFile = (
+  workspaceId: string,
+  name: string,
+) => post<{ ok: true }>('delete-file', { workspaceId, name })
+
+export const deleteLocalServerDirectory = (
+  workspaceId: string,
+  name: string,
+) => post<{ ok: true }>('delete-directory', { workspaceId, name })
