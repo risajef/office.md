@@ -547,7 +547,9 @@ test.describe('rich document behavior', () => {
     await page.setViewportSize({ width: 1400, height: 900 })
     await expect(outline).toBeVisible()
     await expect(files).toBeVisible()
-    await expect(page.locator('.workspace-resizer')).toHaveCount(0)
+    await expect(page.locator('.workspace-resizer')).toHaveCount(2)
+    await expect(page.locator('#outline-resizer')).toBeVisible()
+    await expect(page.locator('#files-resizer')).toBeVisible()
     const wideWidth = await main.evaluate(
       (element) => Math.round(element.getBoundingClientRect().width),
     )
@@ -569,6 +571,88 @@ test.describe('rich document behavior', () => {
     await page.setViewportSize({ width: 700, height: 900 })
     await expect(outline).toBeHidden()
     await expect(files).toBeHidden()
+  })
+
+  test('resizes and collapses both workspace sidebars', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 900 })
+    const outline = page.locator('.outline-sidebar')
+    const files = page.locator('.workspace-sidebar')
+    const outlineResizer = page.locator('#outline-resizer')
+    const filesResizer = page.locator('#files-resizer')
+
+    const outlineWidth = await outline.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    )
+    const outlineHandle = await outlineResizer.boundingBox()
+    expect(outlineHandle).not.toBeNull()
+    await page.mouse.move(
+      outlineHandle!.x + outlineHandle!.width / 2,
+      outlineHandle!.y + 100,
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      outlineHandle!.x + outlineHandle!.width / 2 + 60,
+      outlineHandle!.y + 100,
+    )
+    await page.mouse.up()
+    await expect.poll(() => outline.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    )).toBeGreaterThan(outlineWidth)
+
+    const filesWidth = await files.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    )
+    const filesHandle = await filesResizer.boundingBox()
+    expect(filesHandle).not.toBeNull()
+    await page.mouse.move(
+      filesHandle!.x + filesHandle!.width / 2,
+      filesHandle!.y + 100,
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      filesHandle!.x + filesHandle!.width / 2 - 60,
+      filesHandle!.y + 100,
+    )
+    await page.mouse.up()
+    await expect.poll(() => files.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    )).toBeGreaterThan(filesWidth)
+
+    await page.locator('#toggle-outline').click()
+    await expect(outline).toBeHidden()
+    await expect(page.locator('#workspace-layout')).toHaveAttribute(
+      'data-outline-collapsed',
+      'true',
+    )
+    await outlineResizer.click()
+    await expect(outline).toBeVisible()
+
+    await page.locator('#toggle-files').click()
+    await expect(files).toBeHidden()
+    await filesResizer.click()
+    await expect(files).toBeVisible()
+  })
+
+  test('renders raw HTML and edits its source without rendering comments', async ({
+    page,
+  }) => {
+    const htmlSource = '<section data-testid="html-preview" onclick="alert(1)"><strong>Rendered HTML</strong></section>\n\n<!-- hidden document comment -->'
+    const visibleHtmlSource = '<section data-testid="html-preview" onclick="alert(1)"><strong>Rendered HTML</strong></section>'
+    const updatedHtmlSource = '<section data-testid="html-preview"><strong>Updated HTML</strong></section>'
+    await editMarkdownSource(page, htmlSource)
+
+    const preview = page.locator('.html-content-preview').first()
+    await expect(preview).toContainText('Rendered HTML')
+    await expect(page.locator('.ProseMirror')).not.toContainText('hidden document comment')
+    await expect(preview.locator('section')).not.toHaveAttribute('onclick', 'alert(1)')
+    await expect(preview.locator('script')).toHaveCount(0)
+
+    await preview.click()
+    await expect(page.locator('.html-source-editor')).toHaveValue(visibleHtmlSource)
+    await page.locator('.html-source-editor').fill(updatedHtmlSource)
+    await page.locator('#document-stats').click()
+    await expect(page.locator('.html-source-editor')).toHaveCount(0)
+    await expect(page.locator('.html-content-preview').first()).toContainText('Updated HTML')
   })
 
   test('creates and toggles Markdown checklist items', async ({ page }) => {

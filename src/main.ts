@@ -58,6 +58,7 @@ import {
   notifyMarkdownIncludesChanged,
   remarkMarkdownIncludePlugin,
 } from './plugins/markdown-include-plugin'
+import { htmlContentPlugin } from './plugins/html-content-plugin'
 import {
   createLocalDirectory,
   deleteLocalDirectory,
@@ -119,6 +120,7 @@ const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
 const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
 const LOCAL_SERVER_PATH_KEY = 'milkdown-editor-local-server-path-v1'
+const WORKSPACE_LAYOUT_KEY = 'milkdown-editor-workspace-layout-v1'
 const IMAGE_DRAG_MIME = 'application/x-office-md-image'
 
 const isStorageQuotaError = (error: unknown) => {
@@ -261,6 +263,11 @@ const renameDocumentButton = document.querySelector<HTMLButtonElement>(
   '#rename-document',
 )
 const outlineElement = document.querySelector<HTMLElement>('#document-outline')
+const workspaceLayout = document.querySelector<HTMLElement>('.workspace-layout')
+const outlineToggle = document.querySelector<HTMLButtonElement>('#toggle-outline')
+const filesToggle = document.querySelector<HTMLButtonElement>('#toggle-files')
+const outlineResizer = document.querySelector<HTMLButtonElement>('#outline-resizer')
+const filesResizer = document.querySelector<HTMLButtonElement>('#files-resizer')
 const layoutModeSelect = document.querySelector<HTMLSelectElement>('#layout-mode')
 const pageFormatSelect = document.querySelector<HTMLSelectElement>('#page-format')
 const pageSettingsButton = document.querySelector<HTMLButtonElement>('#page-settings')
@@ -309,6 +316,185 @@ if (debugMarkdownView) debugMarkdownView.hidden = !isDebugMode
 if (!editorRoot) {
   throw new Error('The editor root could not be initialized.')
 }
+
+type WorkspacePanel = 'outline' | 'files'
+
+type WorkspaceLayoutState = {
+  outlineWidth: number
+  filesWidth: number
+  outlineCollapsed: boolean
+  filesCollapsed: boolean
+}
+
+const defaultWorkspaceLayout: WorkspaceLayoutState = {
+  outlineWidth: 190,
+  filesWidth: 220,
+  outlineCollapsed: false,
+  filesCollapsed: false,
+}
+
+const workspaceWidth = (
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) => typeof value === 'number' && Number.isFinite(value)
+  ? Math.min(maximum, Math.max(minimum, value))
+  : fallback
+
+const readWorkspaceLayout = (): WorkspaceLayoutState => {
+  const stored = window.localStorage.getItem(WORKSPACE_LAYOUT_KEY)
+  if (!stored) return { ...defaultWorkspaceLayout }
+  try {
+    const parsed = JSON.parse(stored) as Partial<WorkspaceLayoutState>
+    return {
+      outlineWidth: workspaceWidth(parsed.outlineWidth, 190, 140, 360),
+      filesWidth: workspaceWidth(parsed.filesWidth, 220, 160, 400),
+      outlineCollapsed: parsed.outlineCollapsed === true,
+      filesCollapsed: parsed.filesCollapsed === true,
+    }
+  } catch {
+    return { ...defaultWorkspaceLayout }
+  }
+}
+
+const workspaceLayoutState = readWorkspaceLayout()
+
+const persistWorkspaceLayout = () => {
+  window.localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(workspaceLayoutState))
+}
+
+const updateWorkspacePanelControl = (
+  panel: WorkspacePanel,
+  collapsed: boolean,
+) => {
+  const toggle = panel === 'outline' ? outlineToggle : filesToggle
+  const resizer = panel === 'outline' ? outlineResizer : filesResizer
+  const label = panel === 'outline' ? 'outline' : 'files'
+  const action = collapsed ? 'Show' : 'Hide'
+  toggle?.setAttribute('aria-expanded', String(!collapsed))
+  toggle?.setAttribute('aria-label', `${action} ${label}`)
+  toggle?.setAttribute('title', `${action} ${label}`)
+  if (toggle) toggle.dataset.tooltip = `${action} ${label}`
+  resizer?.setAttribute(
+    'aria-label',
+    collapsed ? `Show ${label} panel` : `Resize ${label} panel`,
+  )
+  resizer?.setAttribute(
+    'title',
+    collapsed ? `Show ${label} panel` : `Resize ${label} panel`,
+  )
+  resizer?.setAttribute('aria-expanded', String(!collapsed))
+  resizer?.toggleAttribute('data-collapsed', collapsed)
+}
+
+const applyWorkspaceLayout = () => {
+  if (!workspaceLayout) return
+  workspaceLayout.style.setProperty(
+    '--outline-width',
+    workspaceLayoutState.outlineCollapsed
+      ? '0px'
+      : `${workspaceLayoutState.outlineWidth}px`,
+  )
+  workspaceLayout.style.setProperty(
+    '--files-width',
+    workspaceLayoutState.filesCollapsed
+      ? '0px'
+      : `${workspaceLayoutState.filesWidth}px`,
+  )
+  workspaceLayout.dataset.outlineCollapsed = String(workspaceLayoutState.outlineCollapsed)
+  workspaceLayout.dataset.filesCollapsed = String(workspaceLayoutState.filesCollapsed)
+  updateWorkspacePanelControl('outline', workspaceLayoutState.outlineCollapsed)
+  updateWorkspacePanelControl('files', workspaceLayoutState.filesCollapsed)
+}
+
+const setWorkspacePanelCollapsed = (panel: WorkspacePanel, collapsed: boolean) => {
+  if (panel === 'outline') workspaceLayoutState.outlineCollapsed = collapsed
+  else workspaceLayoutState.filesCollapsed = collapsed
+  applyWorkspaceLayout()
+  persistWorkspaceLayout()
+}
+
+const workspacePanelIsCollapsed = (panel: WorkspacePanel) =>
+  panel === 'outline'
+    ? workspaceLayoutState.outlineCollapsed
+    : workspaceLayoutState.filesCollapsed
+
+const startWorkspaceResize = (panel: WorkspacePanel, event: PointerEvent) => {
+  if (event.button !== 0) return
+  if (workspacePanelIsCollapsed(panel)) {
+    setWorkspacePanelCollapsed(panel, false)
+    return
+  }
+
+  const handle = event.currentTarget as HTMLElement
+  const startX = event.clientX
+  const startWidth = panel === 'outline'
+    ? workspaceLayoutState.outlineWidth
+    : workspaceLayoutState.filesWidth
+  const minimum = panel === 'outline' ? 140 : 160
+  const maximum = panel === 'outline' ? 360 : 400
+  let finished = false
+
+  event.preventDefault()
+  document.body.classList.add('is-resizing-workspace')
+
+  const onPointerMove = (moveEvent: PointerEvent) => {
+    const delta = moveEvent.clientX - startX
+    const nextWidth = panel === 'outline' ? startWidth + delta : startWidth - delta
+    if (panel === 'outline') {
+      workspaceLayoutState.outlineWidth = workspaceWidth(
+        nextWidth,
+        startWidth,
+        minimum,
+        maximum,
+      )
+    } else {
+      workspaceLayoutState.filesWidth = workspaceWidth(
+        nextWidth,
+        startWidth,
+        minimum,
+        maximum,
+      )
+    }
+    applyWorkspaceLayout()
+  }
+
+  const finish = () => {
+    if (finished) return
+    finished = true
+    handle.removeEventListener('pointermove', onPointerMove)
+    handle.removeEventListener('pointerup', finish)
+    handle.removeEventListener('pointercancel', finish)
+    document.body.classList.remove('is-resizing-workspace')
+    persistWorkspaceLayout()
+  }
+
+  handle.addEventListener('pointermove', onPointerMove)
+  handle.addEventListener('pointerup', finish)
+  handle.addEventListener('pointercancel', finish)
+  handle.setPointerCapture?.(event.pointerId)
+}
+
+applyWorkspaceLayout()
+outlineToggle?.addEventListener('click', () => {
+  setWorkspacePanelCollapsed('outline', !workspaceLayoutState.outlineCollapsed)
+})
+filesToggle?.addEventListener('click', () => {
+  setWorkspacePanelCollapsed('files', !workspaceLayoutState.filesCollapsed)
+})
+outlineResizer?.addEventListener('pointerdown', (event) => {
+  startWorkspaceResize('outline', event)
+})
+filesResizer?.addEventListener('pointerdown', (event) => {
+  startWorkspaceResize('files', event)
+})
+outlineResizer?.addEventListener('click', () => {
+  if (workspaceLayoutState.outlineCollapsed) setWorkspacePanelCollapsed('outline', false)
+})
+filesResizer?.addEventListener('click', () => {
+  if (workspaceLayoutState.filesCollapsed) setWorkspacePanelCollapsed('files', false)
+})
 
 type WorkspaceFile = {
   id: string
@@ -3038,6 +3224,7 @@ const startEditor = async () => {
     .use(remarkMarkdownIncludePlugin)
     .use(markdownIncludeSchema)
     .use(markdownIncludeView)
+    .use(htmlContentPlugin)
     .use(commonmarkPlugins)
     .use(gfm)
     .use(mermaidPlugin)

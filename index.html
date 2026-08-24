@@ -13,16 +13,37 @@
   <body>
     <div class="site-shell">
       <main class="page-content">
-        <div class="workspace-layout">
-          <aside class="outline-sidebar" aria-label="Document outline">
+        <div class="workspace-layout" id="workspace-layout">
+          <aside class="outline-sidebar" id="outline-sidebar" aria-label="Document outline">
             <section class="sidebar-section outline-section">
               <div class="sidebar-heading">
                 <h2>Outline</h2>
+                <button
+                  class="sidebar-collapse"
+                  id="toggle-outline"
+                  type="button"
+                  data-icon="chevron-right"
+                  title="Hide outline"
+                  data-tooltip="Hide outline"
+                  aria-label="Hide outline"
+                  aria-controls="document-outline"
+                  aria-expanded="true"
+                ></button>
               </div>
               <nav id="document-outline" aria-label="Document outline"></nav>
             </section>
 
           </aside>
+
+          <button
+            class="workspace-resizer workspace-resizer-outline"
+            id="outline-resizer"
+            type="button"
+            title="Resize outline panel"
+            aria-label="Resize outline panel"
+            aria-controls="outline-sidebar"
+            aria-orientation="vertical"
+          ></button>
 
           <div class="workspace-main">
             <section class="editor-card" aria-label="Markdown editor">
@@ -240,11 +261,32 @@
             </details>
           </div>
 
-          <aside class="workspace-sidebar" aria-label="Workspace files">
+          <button
+            class="workspace-resizer workspace-resizer-files"
+            id="files-resizer"
+            type="button"
+            title="Resize files panel"
+            aria-label="Resize files panel"
+            aria-controls="workspace-sidebar"
+            aria-orientation="vertical"
+          ></button>
+
+          <aside class="workspace-sidebar" id="workspace-sidebar" aria-label="Workspace files">
             <section class="sidebar-section files-section">
               <div class="sidebar-heading">
                 <h2>Files</h2>
                 <div class="sidebar-actions">
+                  <button
+                    class="sidebar-collapse"
+                    id="toggle-files"
+                    type="button"
+                    data-icon="chevron-right"
+                    title="Hide files"
+                    data-tooltip="Hide files"
+                    aria-label="Hide files"
+                    aria-controls="file-list"
+                    aria-expanded="true"
+                  ></button>
                   <button class="sidebar-action" id="new-file" type="button" data-icon="plus" title="Create file" aria-label="Create file"></button>
                   <button class="sidebar-action" id="new-folder" type="button" data-icon="folder" title="Create folder" aria-label="Create folder" disabled></button>
                 </div>

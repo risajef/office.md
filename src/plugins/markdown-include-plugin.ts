@@ -6,6 +6,7 @@ import { $nodeSchema, $remark, $view } from '@milkdown/kit/utils'
 import type { Options as ToMarkdownExtension } from 'mdast-util-to-markdown'
 import type { Processor } from 'unified'
 import { setIcon } from '../icons'
+import { materializeHtmlContent } from './html-content-plugin'
 
 type IncludeAstNode = {
   type?: string
@@ -165,11 +166,10 @@ const includeView: NodeViewConstructor = (initialNode, view, getPos) => {
       const parsed = renderInclude(markdown)
       if (parsed) {
         try {
-          content.append(
-            DOMSerializer.fromSchema(view.state.schema).serializeFragment(
-              parsed.content,
-            ),
-          )
+          const rendered = DOMSerializer.fromSchema(view.state.schema)
+            .serializeFragment(parsed.content)
+          materializeHtmlContent(rendered)
+          content.append(rendered)
         } catch (error) {
           console.error(`Could not render included Markdown from ${fileName}.`, error)
           const fallback = document.createElement('p')
