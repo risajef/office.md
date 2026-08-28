@@ -509,6 +509,74 @@ test.describe('disk-backed editor workflows', () => {
 })
 
 test.describe('rich document behavior', () => {
+  test('keeps the viewport stable while typing in a visible line', async ({ page }) => {
+    const markdown = [
+      '# Scroll stability',
+      ...Array.from(
+        { length: 36 },
+        (_, index) => `Paragraph ${index + 1} keeps enough content on screen for the scroll regression test.`,
+      ),
+    ].join('\n\n')
+    await editMarkdownSource(page, markdown)
+    await expect(page.locator('.ProseMirror p', { hasText: 'Paragraph 17' })).toBeVisible()
+    const target = page.locator('.ProseMirror p', { hasText: 'Paragraph 17' })
+    await page.evaluate(() => window.scrollTo({ top: 350, behavior: 'instant' }))
+    const targetBox = await target.boundingBox()
+    if (!targetBox) throw new Error('Could not locate the visible target paragraph.')
+    await page.mouse.click(targetBox.x + 80, targetBox.y + 5)
+
+    const readScrollState = () => page.evaluate(() => {
+      const wrap = document.querySelector<HTMLElement>('.editor-wrap')
+      const selection = window.getSelection()
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+      const caret = range?.getBoundingClientRect()
+      return {
+        body: Math.round(document.scrollingElement?.scrollTop ?? 0),
+        window: Math.round(window.scrollY),
+        wrap: Math.round(wrap?.scrollTop ?? 0),
+        caretTop: Math.round(caret?.top ?? -1),
+        caretBottom: Math.round(caret?.bottom ?? -1),
+        viewportBottom: Math.round(window.innerHeight),
+        focusText: selection?.focusNode?.parentElement?.textContent ?? '',
+      }
+    })
+
+    // Keep the caret inside the window, but close enough to the lower edge to
+    // catch an implementation that blindly applies ProseMirror's margin.
+    await page.keyboard.press('End')
+    await page.evaluate(() => {
+      const selection = window.getSelection()
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+      const caret = range?.getBoundingClientRect()
+      if (!caret) return
+      window.scrollTo({
+        top: window.scrollY + caret.bottom - (window.innerHeight - 1),
+        behavior: 'instant',
+      })
+    })
+    const before = await readScrollState()
+    expect(before.caretTop).toBeGreaterThanOrEqual(0)
+    expect(before.caretBottom).toBeLessThanOrEqual(before.viewportBottom)
+
+    await page.keyboard.type('x')
+    await page.waitForTimeout(250)
+    const after = await readScrollState()
+
+    expect(after.body).toBe(before.body)
+    expect(after.window).toBe(before.window)
+    expect(after.wrap).toBe(before.wrap)
+    expect(after.caretTop).toBe(before.caretTop)
+    expect(after.focusText).toContain('Paragraph 17')
+
+    const beforeEnter = await readScrollState()
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(100)
+    const afterEnter = await readScrollState()
+    expect(afterEnter.caretTop).toBeGreaterThanOrEqual(0)
+    expect(afterEnter.caretBottom).toBeLessThanOrEqual(afterEnter.viewportBottom)
+    expect(afterEnter.window).toBeGreaterThan(beforeEnter.window)
+  })
+
   test('keeps document toolbars visible while scrolling', async ({ page }) => {
     const toolbarStack = page.locator('.editor-toolbar-stack')
     const outline = page.locator('.outline-sidebar')
@@ -923,6 +991,18 @@ test.describe('rich document behavior', () => {
       hasText: 'data.csv',
     })
     await expect(csvRow.locator('[data-icon="include"]')).toHaveCount(1)
+  })
+
+  test('keeps Mermaid syntax errors inside their preview', async ({ page }) => {
+    await editMarkdownSource(
+      page,
+      '# Project document\n\n```mermaid\nflowchart LR\n  A -->\n```',
+    )
+
+    const preview = page.locator('.mermaid-preview')
+    await expect(preview).toHaveClass(/has-error/, { timeout: 20_000 })
+    await expect(preview).toContainText('Mermaid error:')
+    await expect(page.locator('body > [id^="dmilkdown-mermaid-"]')).toHaveCount(0)
   })
 
   test('inserts ordinary and CSV-linked Mermaid and persists source edits', async ({

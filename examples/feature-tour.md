@@ -117,4 +117,4 @@ The Include buttons in the Files panel insert live links. Try including
 * Portable Markdown expands includes and CSV-backed Mermaid values; CSV export
   replaces formulas with their calculated values.
 * Open `examples/local-folder-demo` with **Open folder** to edit real files.
-* Open the `styles` folder and click any of its six CSS files to apply a theme.
+* Open the `styles` folder and click any of its six CSS files to apply a theme.![favicon.svg](favicon.svg)

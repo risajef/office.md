@@ -174,6 +174,93 @@ const markerKind = (decoration: Decoration) =>
 const breakHeight = (decoration: Decoration) =>
   (decoration.spec as { height?: number }).height ?? 0
 
+type ScrollRect = {
+  top: number
+  bottom: number
+}
+
+const selectionScrollMargin = 5
+
+const getScrollViewport = (element: HTMLElement): ScrollRect => {
+  const bounds = element.getBoundingClientRect()
+  const scale = (bounds.height / element.offsetHeight) || 1
+  return {
+    top: bounds.top + element.clientTop * scale,
+    bottom: bounds.top + (element.clientTop + element.clientHeight) * scale,
+  }
+}
+
+const isScrollable = (element: HTMLElement) => {
+  const overflowY = window.getComputedStyle(element).overflowY
+  return /^(auto|overlay|scroll)$/.test(overflowY) &&
+    element.scrollHeight > element.clientHeight
+}
+
+const scrollSelectionIntoView = (view: EditorView) => {
+  // ProseMirror requests selection scrolling for every normal text input.
+  // Resolve that request against the real client-space viewports so a caret
+  // that is already visible does not get nudged toward a viewport edge.
+  const focusNode = view.dom.ownerDocument.getSelection()?.focusNode
+  if (!focusNode || !view.dom.contains(focusNode)) return false
+
+  let caret: ScrollRect
+  try {
+    const coords = view.coordsAtPos(view.state.selection.head, 1)
+    caret = { top: coords.top, bottom: coords.bottom }
+  } catch {
+    return false
+  }
+  if (![caret.top, caret.bottom].every(Number.isFinite)) return false
+
+  const scrollParents: HTMLElement[] = []
+  for (
+    let parent: Node | null = focusNode;
+    parent && parent !== document.body;
+    parent = parent.parentNode
+  ) {
+    if (parent instanceof HTMLElement && isScrollable(parent)) {
+      scrollParents.push(parent)
+    }
+  }
+
+  for (const parent of scrollParents) {
+    const viewport = getScrollViewport(parent)
+    let delta = 0
+    if (caret.top < viewport.top) {
+      delta = caret.top - viewport.top - selectionScrollMargin
+    } else if (caret.bottom > viewport.bottom) {
+      delta = caret.bottom - viewport.bottom + selectionScrollMargin
+    }
+    if (!delta) continue
+
+    const previousScrollTop = parent.scrollTop
+    parent.scrollTop += delta
+    caret = {
+      top: caret.top - (parent.scrollTop - previousScrollTop),
+      bottom: caret.bottom - (parent.scrollTop - previousScrollTop),
+    }
+  }
+
+  const viewport = {
+    top: 0,
+    bottom: window.innerHeight,
+  }
+  if (caret.top < viewport.top || caret.bottom > viewport.bottom) {
+    const delta = caret.top < viewport.top
+      ? caret.top - viewport.top - selectionScrollMargin
+      : caret.bottom - viewport.bottom + selectionScrollMargin
+    const previousScrollTop = window.scrollY
+    window.scrollBy(0, delta)
+    const actualScroll = window.scrollY - previousScrollTop
+    caret = {
+      top: caret.top - actualScroll,
+      bottom: caret.bottom - actualScroll,
+    }
+  }
+
+  return true
+}
+
 const makeBreakDecoration = (
   kind: 'automatic' | 'forced',
   height: number,
@@ -408,13 +495,14 @@ export const pageLayoutPlugin = (options: PageLayoutPluginOptions) =>
         }
         if (!transaction.docChanged) return previous
         return {
-          decorations: DecorationSet.empty,
+          decorations: previous.decorations.map(transaction.mapping, transaction.doc),
           revision: previous.revision + 1,
         }
       },
     },
     props: {
       decorations: (state) => pageLayoutKey.getState(state)?.decorations ?? DecorationSet.empty,
+      handleScrollToSelection: scrollSelectionIntoView,
     },
     view: (view) => {
       let frame: number | undefined

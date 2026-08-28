@@ -222,7 +222,7 @@ const mermaidView: NodeViewConstructor = (initialNode, view, getPos) => {
     preview.textContent = 'Rendering diagram…'
 
     mermaid
-      .render(`milkdown-mermaid-${renderId}`, renderCode)
+      .render(`milkdown-mermaid-${renderId}`, renderCode, preview)
       .then(({ svg }) => {
         if (currentRender === renderId) {
           preview.innerHTML = svg
