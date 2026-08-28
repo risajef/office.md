@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')) as {
   main?: string
+  dependencies?: Record<string, string>
   scripts?: Record<string, string>
 }
 const electronBuildScript = readFileSync(
@@ -27,6 +28,13 @@ const builderConfig = JSON.parse(
     target?: Array<{ target?: string; arch?: string[] }>
     artifactName?: string
   }
+  publish?: {
+    provider?: string
+    owner?: string
+    repo?: string
+    releaseType?: string
+    publishAutoUpdate?: boolean
+  }
 }
 
 describe('Electron packaging configuration', () => {
@@ -46,6 +54,7 @@ describe('Electron packaging configuration', () => {
 
   it('packages the production renderer and Electron entry point', () => {
     expect(packageJson.main).toBe('dist-electron/electron/main.js')
+    expect(packageJson.dependencies?.['electron-updater']).toBeTruthy()
     expect(builderConfig.files).toEqual(expect.arrayContaining([
       'dist/**',
       'dist-electron/**',
@@ -61,6 +70,16 @@ describe('Electron packaging configuration', () => {
   it('keeps local packaging non-publishing by default', () => {
     expect(packageJson.scripts?.['package:electron'])
       .toContain('--publish never')
+  })
+
+  it('configures stable GitHub updater metadata for both supported packages', () => {
+    expect(builderConfig.publish).toEqual({
+      provider: 'github',
+      owner: 'risajef',
+      repo: 'office.md',
+      releaseType: 'release',
+      publishAutoUpdate: true,
+    })
   })
 
   it('checks the executable names emitted for each package platform', () => {

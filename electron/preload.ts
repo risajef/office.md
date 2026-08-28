@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronWorkspaceApi } from '../src/electron-api'
+import type {
+  ElectronUpdateApi,
+  ElectronWorkspaceApi,
+} from '../src/electron-api'
+import type { UpdateState } from '../src/electron-update'
 import type { WorkspaceSnapshot } from '../src/workspace-port'
 
 // Keep the sandboxed preload self-contained: it may require Electron's
@@ -15,6 +19,15 @@ const channels = {
   createDirectory: 'workspace:create-directory',
   deleteFile: 'workspace:delete-file',
   deleteDirectory: 'workspace:delete-directory',
+} as const
+
+const updateChannels = {
+  state: 'update:state',
+  getState: 'update:get-state',
+  check: 'update:check',
+  download: 'update:download',
+  install: 'update:install',
+  postpone: 'update:postpone',
 } as const
 
 const invoke = <Result>(channel: string, payload?: unknown) =>
@@ -60,4 +73,22 @@ const workspace: ElectronWorkspaceApi = {
   ),
 }
 
-contextBridge.exposeInMainWorld('officeMd', { workspace })
+const isUpdateState = (value: unknown): value is UpdateState =>
+  Boolean(value && typeof value === 'object' && 'status' in value)
+
+const updates: ElectronUpdateApi = {
+  getState: () => invoke<UpdateState>(updateChannels.getState),
+  check: () => invoke<UpdateState>(updateChannels.check),
+  download: () => invoke<UpdateState>(updateChannels.download),
+  install: () => invoke<UpdateState>(updateChannels.install),
+  postpone: () => invoke<UpdateState>(updateChannels.postpone),
+  subscribe: (listener) => {
+    const handleState = (_event: unknown, value: unknown) => {
+      if (isUpdateState(value)) listener(value)
+    }
+    ipcRenderer.on(updateChannels.state, handleState)
+    return () => ipcRenderer.removeListener(updateChannels.state, handleState)
+  },
+}
+
+contextBridge.exposeInMainWorld('officeMd', { workspace, updates })

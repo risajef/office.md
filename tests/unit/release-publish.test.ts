@@ -7,11 +7,33 @@ import { publishRelease } from '../../scripts/release-publish.mjs'
 const assetNames = [
   'office.md-1.2.3-linux-x64.AppImage',
   'office.md-1.2.3-windows-x64.exe',
+  'latest-linux.yml',
+  'latest.yml',
+  'office.md-1.2.3-windows-x64.exe.blockmap',
 ]
+
+const metadata = (packageName, hash) => `version: 1.2.3
+files:
+  - url: ${packageName}
+    sha512: ${hash}
+    size: 123
+    blockMapSize: 456
+path: ${packageName}
+sha512: ${hash}
+releaseDate: '2026-08-28T00:00:00.000Z'
+`
+
+const assetContents = new Map([
+  ['latest-linux.yml', metadata('office.md-1.2.3-linux-x64.AppImage', 'linux-hash')],
+  ['latest.yml', metadata('office.md-1.2.3-windows-x64.exe', 'windows-hash')],
+])
 
 const createAssetDirectory = async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'office-md-release-test-'))
-  await Promise.all(assetNames.map((name) => writeFile(path.join(directory, name), name)))
+  await Promise.all(assetNames.map((name) => writeFile(
+    path.join(directory, name),
+    assetContents.get(name) ?? name,
+  )))
   return directory
 }
 
@@ -70,6 +92,26 @@ describe('release publication', () => {
       )))
       expect(calls[firstUpload]).toContain('--clobber')
       expect(calls[firstPublish]).toContain('--draft=false')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('does not invoke GitHub when updater metadata is missing', async () => {
+    const directory = await createAssetDirectory()
+    let calls = 0
+    try {
+      await rm(path.join(directory, 'latest.yml'))
+      await expect(publishRelease({
+        tag: 'v1.2.3',
+        version: '1.2.3',
+        directory,
+        run: async () => {
+          calls += 1
+          return { status: 0 }
+        },
+      })).rejects.toThrow()
+      expect(calls).toBe(0)
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

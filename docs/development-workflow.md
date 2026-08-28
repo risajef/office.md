@@ -43,10 +43,15 @@ This layering keeps workspace files as the cross-host source of truth. Markdown,
 
 Release tags use the stable `vMAJOR.MINOR.PATCH` convention, such as `v0.1.0`. The `Release Electron` workflow runs only for pushed tags, checks that the tag matches `package.json`, validates the repository, and packages on native x64 Ubuntu and Windows runners. A package job cannot publish a GitHub Release.
 
-The resulting assets are collected into one draft release and published only after both files pass the exact asset manifest check:
+The resulting assets are collected into one draft release and published only after the exact package and updater metadata manifest passes validation:
 
 - `office.md-<version>-linux-x64.AppImage`
 - `office.md-<version>-windows-x64.exe`
+- `latest-linux.yml`
+- `latest.yml`
+- `office.md-<version>-windows-x64.exe.blockmap`
+
+The Linux AppImage contains its block map, while the Windows NSIS target emits an external blockmap. The metadata validator checks stable versions, platform-specific package names, non-empty hashes, and that every referenced asset is present in the same release. The release stays a draft until the upload and verification steps succeed.
 
 Users download these files from the repository's GitHub **Releases** page. A repeated run for the same tag replaces the matching assets in the existing release.
 
@@ -58,6 +63,12 @@ npm run package:electron -- --win --x64
 ```
 
 The command always passes electron-builder's `--publish never` flag and writes output below `release/`. The packages are currently unsigned; Windows SmartScreen and Linux desktop policies may warn users before the application starts.
+
+### Desktop update behavior
+
+Only packaged x64 Linux and Windows builds check the public `risajef/office.md` GitHub Releases source. The startup check runs asynchronously after the editor window opens; the desktop notification also provides **Check for updates** for a manual check. A found stable release is never downloaded automatically: the user chooses **Download update** or **Later**. Once downloaded, **Restart to install** hands control to electron-updater, while **Later** keeps the current application and workspace running.
+
+Offline checks, invalid metadata, interrupted downloads, and failed installation handoffs produce a retryable notification and preserve the current version. The browser runtime, local development server, unpackaged Electron launches, and automated test sessions do not perform update checks. Packages remain unsigned until signing and notarization are added, so OS security warnings are expected.
 
 Use these commands for the supported targets:
 

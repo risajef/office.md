@@ -73,6 +73,10 @@ npm run package:electron -- --win --x64
 
 Packages are written to `release/`. The first release packages are unsigned, so Windows SmartScreen and Linux desktop policies may show security warnings before launch.
 
+Packaged x64 Linux and Windows desktop builds check the public GitHub Releases page for newer stable versions after startup. Development, unpackaged, and automated test sessions keep updates disabled and do not contact GitHub. When an update is found, use **Download update** to confirm the download or **Later** to keep working. After the download completes, **Restart to install** performs the controlled restart; choosing **Later** leaves the current editor and workspace untouched. **Check for updates** starts a manual check. Network or metadata failures remain retryable and do not prevent the editor from opening.
+
+The updater uses electron-builder's `latest-linux.yml`/`latest.yml` metadata and package hashes from the same GitHub Release. Linux AppImage block-map data is embedded in the package; Windows NSIS releases publish the matching `.exe.blockmap` asset. Releases are currently unsigned, so operating-system trust warnings can still appear during a first install or update.
+
 ## Project syntax
 
 Include another Markdown or CSV file as a live block:

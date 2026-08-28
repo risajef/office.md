@@ -1,5 +1,8 @@
-import { readdir } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
+import {
+  verifyReleaseMetadata,
+} from './release-metadata.mjs'
 
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
@@ -15,6 +18,9 @@ export const createReleaseAssetManifest = (version) => {
   return [
     `office.md-${validVersion}-linux-x64.AppImage`,
     `office.md-${validVersion}-windows-x64.exe`,
+    'latest-linux.yml',
+    'latest.yml',
+    `office.md-${validVersion}-windows-x64.exe.blockmap`,
   ]
 }
 
@@ -38,6 +44,21 @@ export const verifyReleaseAssets = (version, assets) => {
   return expected
 }
 
+export const verifyReleaseDirectory = async (version, directory) => {
+  const resolvedDirectory = path.resolve(directory)
+  const entries = await readdir(resolvedDirectory, { withFileTypes: true })
+  const assets = entries.map((entry) => entry.name)
+  const manifest = verifyReleaseAssets(version, assets)
+  await Promise.all([
+    ['linux', 'latest-linux.yml'],
+    ['windows', 'latest.yml'],
+  ].map(async ([platform, metadataName]) => {
+    const content = await readFile(path.join(resolvedDirectory, metadataName), 'utf8')
+    verifyReleaseMetadata({ version, platform, content, assets })
+  }))
+  return manifest
+}
+
 const argumentValue = (argumentsList, name) => {
   const index = argumentsList.indexOf(name)
   return index < 0 ? undefined : argumentsList[index + 1]
@@ -49,11 +70,7 @@ const run = async () => {
   const directory = argumentValue(argumentsList, '--directory')
     ?? process.env.RELEASE_ASSET_DIR
   if (!directory) throw new Error('Provide a release asset directory.')
-  const entries = await readdir(path.resolve(directory), { withFileTypes: true })
-  const manifest = verifyReleaseAssets(
-    version,
-    entries.map((entry) => entry.name),
-  )
+  const manifest = await verifyReleaseDirectory(version, directory)
   process.stdout.write(`${manifest.join('\n')}\n`)
 }
 

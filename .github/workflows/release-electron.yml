@@ -69,10 +69,13 @@ jobs:
             platform: linux
             target: --linux
             extension: .AppImage
+            metadata: latest-linux.yml
           - os: windows-latest
             platform: windows
             target: --win
             extension: .exe
+            metadata: latest.yml
+            blockmap: .exe.blockmap
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -102,11 +105,21 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run package:smoke
 
-      - name: Upload the exact platform asset
+      - name: Upload the platform package and updater metadata
         uses: actions/upload-artifact@v4
         with:
           name: electron-${{ matrix.platform }}
-          path: release/office.md-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-x64${{ matrix.extension }}
+          path: |
+            release/office.md-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-x64${{ matrix.extension }}
+            release/${{ matrix.metadata }}
+          if-no-files-found: error
+
+      - name: Upload the Windows updater blockmap
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.platform }}-blockmap
+          path: release/office.md-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-x64${{ matrix.extension }}${{ matrix.blockmap }}
           if-no-files-found: error
 
   publish:

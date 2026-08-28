@@ -1,16 +1,55 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import {
+  ELECTRON_UPDATE_CHANNELS,
   ELECTRON_WORKSPACE_CHANNELS,
 } from '../src/electron-api'
+import {
+  createFakeUpdateProvider,
+  type UpdateArchitecture,
+  type UpdatePlatform,
+  type UpdateState,
+} from '../src/electron-update'
 import {
   createElectronWorkspaceService,
   type ElectronWorkspaceRequest,
 } from './workspace-service'
+import { createElectronUpdateService } from './update-service'
+import { createElectronUpdaterProvider } from './updater-provider'
 
 const service = createElectronWorkspaceService()
 let mainWindow: BrowserWindow | undefined
 let lastWorkspacePath: string | undefined
+
+const updatePlatform: UpdatePlatform = process.platform === 'win32' ? 'win32' : 'linux'
+const updateArchitecture: UpdateArchitecture = 'x64'
+const isSupportedUpdateTarget = (
+  process.platform === 'linux' || process.platform === 'win32'
+) && process.arch === 'x64'
+const testUpdateMode = Boolean(process.env.OFFICE_MD_TEST_UPDATE)
+const updateProvider = testUpdateMode
+  ? createFakeUpdateProvider({
+      releases: [{
+        version: process.env.OFFICE_MD_TEST_UPDATE_VERSION ?? '99.0.0',
+        platform: updatePlatform,
+        architecture: updateArchitecture,
+      }],
+    }).provider
+  : createElectronUpdaterProvider(
+      autoUpdater,
+      updatePlatform,
+      updateArchitecture,
+    )
+const updateService = createElectronUpdateService({
+  currentVersion: app.getVersion(),
+  platform: updatePlatform,
+  architecture: updateArchitecture,
+  isPackaged: isSupportedUpdateTarget && app.isPackaged,
+  environment: process.env,
+  provider: updateProvider,
+  allowTestUpdates: testUpdateMode,
+})
 
 const recordPayload = (payload: unknown) => {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -63,6 +102,18 @@ const registerWorkspaceHandlers = () => {
   }
 }
 
+const registerUpdateHandlers = () => {
+  updateService.subscribe((state: UpdateState) => {
+    mainWindow?.webContents.send(ELECTRON_UPDATE_CHANNELS.state, state)
+  })
+
+  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.getState, () => updateService.getState())
+  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.check, () => updateService.check())
+  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.download, () => updateService.download())
+  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.install, () => updateService.install())
+  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.postpone, () => updateService.postpone())
+}
+
 const createWindow = async () => {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -90,7 +141,9 @@ void app.whenReady().then(async () => {
     lastWorkspacePath = process.env.OFFICE_MD_TEST_WORKSPACE
   }
   registerWorkspaceHandlers()
+  registerUpdateHandlers()
   await createWindow()
+  void updateService.start()
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()
   })

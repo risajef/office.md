@@ -52,4 +52,12 @@ describe('Electron release workflow contract', () => {
     expect(publisher).toMatch(/'release'[\s\S]*?'upload'[\s\S]*?'--clobber'/)
     expect(publisher).toMatch(/'release'[\s\S]*?'edit'[\s\S]*?'--draft=false'/)
   })
+
+  it('ships both provider metadata files and their blockmaps with platform packages', () => {
+    expect(workflow).toContain('latest-linux.yml')
+    expect(workflow).toContain('latest.yml')
+    expect(workflow).toContain('.exe.blockmap')
+    expect(workflow).toContain('if-no-files-found: error')
+    expect(workflow).toMatch(/release:check-assets[\s\S]*?release:publish/)
+  })
 })

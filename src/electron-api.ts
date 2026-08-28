@@ -1,4 +1,5 @@
 import type { WorkspaceSnapshot } from './workspace-port'
+import type { UpdateState } from './electron-update'
 
 export const ELECTRON_WORKSPACE_CHANNELS = {
   open: 'workspace:open',
@@ -26,11 +27,29 @@ export type ElectronWorkspaceApi = {
   deleteDirectory: (workspaceId: string, name: string) => Promise<void>
 }
 
+export const ELECTRON_UPDATE_CHANNELS = {
+  state: 'update:state',
+  getState: 'update:get-state',
+  check: 'update:check',
+  download: 'update:download',
+  install: 'update:install',
+  postpone: 'update:postpone',
+} as const
+
+export type ElectronUpdateApi = {
+  getState: () => Promise<UpdateState>
+  check: () => Promise<UpdateState>
+  download: () => Promise<UpdateState>
+  install: () => Promise<UpdateState>
+  postpone: () => Promise<UpdateState>
+  subscribe: (listener: (state: UpdateState) => void) => () => void
+}
+
 declare global {
   interface Window {
     officeMd?: {
       workspace?: ElectronWorkspaceApi
+      updates?: ElectronUpdateApi
     }
   }
 }
-

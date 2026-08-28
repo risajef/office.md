@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { _electron as electron, expect, test } from '@playwright/test'
@@ -70,6 +70,48 @@ test('Electron shell loads the shared renderer and secure workspace bridge', asy
     await expect(page.locator('#folder-status')).toContainText('disk-backed')
     await expect(page.locator('#document-name')).toHaveText('document.md')
     expect(await page.evaluate(() => Boolean(window.officeMd?.workspace))).toBe(true)
+  } finally {
+    await application?.close()
+    virtualDisplay?.process.kill()
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('shows a deterministic update and keeps the workspace usable when postponed', async () => {
+  test.skip(!existsSync(electronPath), 'Electron binary is not installed.')
+  test.skip(needsXvfb && !existsSync('/usr/bin/Xvfb'), 'Xvfb is not installed.')
+
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-update-e2e-'))
+  await writeRepresentativeWorkspace(workspace)
+  const originalDocument = await readFile(path.join(workspace, 'document.md'), 'utf8')
+  const environment = { ...process.env }
+  delete environment.ELECTRON_RUN_AS_NODE
+  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_TEST_WORKSPACE = workspace
+  environment.OFFICE_MD_TEST_UPDATE = 'available'
+  environment.OFFICE_MD_TEST_UPDATE_VERSION = '99.0.0'
+  const virtualDisplay = needsXvfb ? await startXvfb() : undefined
+  if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
+  let application: Awaited<ReturnType<typeof electron.launch>> | undefined
+
+  try {
+    application = await electron.launch({
+      executablePath: electronPath,
+      args: [process.cwd()],
+      env: environment,
+    })
+    const page = application.windows()[0] ?? await application.firstWindow()
+    await expect(page.locator('#editor')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#update-notification')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#update-message')).toContainText('99.0.0')
+
+    await page.locator('#update-postpone').click()
+    await expect(page.locator('#update-download')).toBeVisible()
+    await page.locator('#update-download').click()
+    await expect(page.locator('#update-install')).toBeVisible()
+    await page.locator('#update-postpone').click()
+    await expect(page.locator('#editor')).toBeVisible()
+    expect(await readFile(path.join(workspace, 'document.md'), 'utf8')).toBe(originalDocument)
   } finally {
     await application?.close()
     virtualDisplay?.process.kill()

@@ -8,6 +8,13 @@
     "dist/**",
     "dist-electron/**"
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "risajef",
+    "repo": "office.md",
+    "releaseType": "release",
+    "publishAutoUpdate": true
+  },
   "linux": {
     "target": [
       {

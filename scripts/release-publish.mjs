@@ -1,23 +1,16 @@
 import { spawnSync } from 'node:child_process'
-import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseReleaseTag, validateReleaseVersion } from './release-version.mjs'
-import { verifyReleaseAssets } from './release-assets.mjs'
+import { verifyReleaseDirectory } from './release-assets.mjs'
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
 )
 
-const readAssetNames = async (directory) => {
-  const entries = await readdir(path.resolve(directory), { withFileTypes: true })
-  return entries.map((entry) => entry.name)
-}
-
 export const collectReleaseAssets = async (version, directory) => {
-  const names = await readAssetNames(directory)
-  const manifest = verifyReleaseAssets(version, names)
+  const manifest = await verifyReleaseDirectory(version, directory)
   return {
     names: manifest,
     paths: manifest.map((name) => path.resolve(directory, name)),

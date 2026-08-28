@@ -7,6 +7,9 @@ import {
 const expectedAssets = [
   'office.md-1.2.3-linux-x64.AppImage',
   'office.md-1.2.3-windows-x64.exe',
+  'latest-linux.yml',
+  'latest.yml',
+  'office.md-1.2.3-windows-x64.exe.blockmap',
 ]
 
 describe('release asset verification', () => {
@@ -16,7 +19,10 @@ describe('release asset verification', () => {
   })
 
   it.each([
-    ['missing the Windows asset', ['office.md-1.2.3-linux-x64.AppImage']],
+    ['missing the Windows asset', [
+      'office.md-1.2.3-linux-x64.AppImage',
+      'latest-linux.yml',
+    ]],
     ['has an unexpected asset', [...expectedAssets, 'checksums.txt']],
     ['has the wrong version', [
       'office.md-1.2.3-linux-x64.AppImage',

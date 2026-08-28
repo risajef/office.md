@@ -83,6 +83,7 @@ import {
 import { createIcon, hydrateIcons, setIcon } from './icons'
 import { createEditorRuntime } from './editor-runtime'
 import { createRuntimeWorkspacePort } from './runtime-workspace-port'
+import { mountElectronUpdateUi } from './electron-update-ui'
 import type { WorkspaceSnapshot } from './workspace-port'
 
 // The examples are the dev workspace default. New storage versions prevent a
@@ -281,6 +282,10 @@ const exampleCsvModules = import.meta.glob<string>(
 )
 
 hydrateIcons()
+
+const cleanupElectronUpdateUi = window.officeMd?.updates
+  ? mountElectronUpdateUi(window.officeMd.updates)
+  : undefined
 
 if (debugMarkdownView) debugMarkdownView.hidden = !isDebugMode
 
@@ -3093,6 +3098,7 @@ const startEditor = async () => {
       void saveDiskFile(file)
     }
     cleanupImageDrop()
+    cleanupElectronUpdateUi?.()
     csvContextToolbar.destroy()
     editor.destroy()
   })
