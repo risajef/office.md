@@ -1,0 +1,146 @@
+name: Release Electron
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Validate release tag and package version
+        id: release-version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: echo "version=$(npm run --silent release:check-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run browser and Electron tests
+        run: npm run test:e2e
+
+      - name: Build production renderer
+        run: npm run build
+
+      - name: Build Electron entry points
+        run: npm run build:electron
+
+      - name: Validate OpenSpec
+        run: npm run spec:validate
+
+  package:
+    name: Package ${{ matrix.platform }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            target: --linux
+            extension: .AppImage
+          - os: windows-latest
+            platform: windows
+            target: --win
+            extension: .exe
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Validate release tag and package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:check-version
+
+      - name: Build non-publishing platform package
+        run: npm run package:electron -- ${{ matrix.target }} --x64 --publish never
+
+      - name: Smoke-test the packaged application on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run package:smoke
+
+      - name: Smoke-test the packaged application on Windows
+        if: runner.os == 'Windows'
+        run: npm run package:smoke
+
+      - name: Upload the exact platform asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.platform }}
+          path: release/office.md-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-x64${{ matrix.extension }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Download platform assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: electron-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify the complete release asset manifest
+        run: npm run release:check-assets -- --version "${{ needs.validate.outputs.version }}" --directory release-assets
+
+      - name: Stage and publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: npm run release:publish -- --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --directory release-assets

@@ -54,6 +54,25 @@ npm run electron:start
 
 The desktop app opens local folders through the native folder dialog. Workspace files remain the source of truth; no desktop-only document database is introduced. VS Code integration is intentionally deferred.
 
+### Desktop releases
+
+GitHub Actions creates desktop releases for stable tags in the form `vMAJOR.MINOR.PATCH`, for example `v0.1.0`. After the workflow completes, download the platform package from the repository's GitHub **Releases** page:
+
+- `office.md-<version>-linux-x64.AppImage`
+- `office.md-<version>-windows-x64.exe`
+
+Local packaging is native to the host and never publishes a GitHub release:
+
+```bash
+# Linux x64 AppImage
+npm run package:electron -- --linux --x64
+
+# Windows x64 NSIS installer (run on Windows)
+npm run package:electron -- --win --x64
+```
+
+Packages are written to `release/`. The first release packages are unsigned, so Windows SmartScreen and Linux desktop policies may show security warnings before launch.
+
 ## Project syntax
 
 Include another Markdown or CSV file as a live block:

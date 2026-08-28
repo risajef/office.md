@@ -39,6 +39,26 @@ The application has one renderer and two host adapters:
 
 This layering keeps workspace files as the cross-host source of truth. Markdown, CSV formulas, includes, Mermaid materialization, and exports stay above the host boundary. VS Code integration is not part of the current target set.
 
+## Desktop release workflow
+
+Release tags use the stable `vMAJOR.MINOR.PATCH` convention, such as `v0.1.0`. The `Release Electron` workflow runs only for pushed tags, checks that the tag matches `package.json`, validates the repository, and packages on native x64 Ubuntu and Windows runners. A package job cannot publish a GitHub Release.
+
+The resulting assets are collected into one draft release and published only after both files pass the exact asset manifest check:
+
+- `office.md-<version>-linux-x64.AppImage`
+- `office.md-<version>-windows-x64.exe`
+
+Users download these files from the repository's GitHub **Releases** page. A repeated run for the same tag replaces the matching assets in the existing release.
+
+To package locally without publishing, run the target command on its native host:
+
+```bash
+npm run package:electron -- --linux --x64
+npm run package:electron -- --win --x64
+```
+
+The command always passes electron-builder's `--publish never` flag and writes output below `release/`. The packages are currently unsigned; Windows SmartScreen and Linux desktop policies may warn users before the application starts.
+
 Use these commands for the supported targets:
 
 ```bash
