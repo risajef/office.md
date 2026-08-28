@@ -3,14 +3,22 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "dist-electron/electron/main.js",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:electron": "node scripts/build-electron.mjs",
+    "electron:start": "npm run build:electron && electron .",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:all": "npm run test && npm run test:e2e"
+    "test:all": "npm run test && npm run test:e2e",
+    "spec:validate": "openspec validate --all --no-interactive",
+    "spec:list": "openspec list --specs"
   },
   "dependencies": {
     "@milkdown/kit": "7.22.0",
@@ -25,11 +33,16 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@fission-ai/openspec": "1.11.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "22.15.21",
+    "electron": "^37.10.3",
     "jsdom": "^30.0.1",
     "typescript": "5.8.3",
-    "vite": "6.3.5",
+    "vite": "6.4.3",
     "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
   }
 }

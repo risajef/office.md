@@ -60,36 +60,6 @@ import {
 } from './plugins/markdown-include-plugin'
 import { htmlContentPlugin } from './plugins/html-content-plugin'
 import {
-  createLocalDirectory,
-  deleteLocalDirectory,
-  deleteLocalTextFile,
-  ensureLocalPermission,
-  pickLocalDirectory,
-  queryLocalPermission,
-  readLocalWorkspace,
-  renameLocalTextFile,
-  rememberLocalDirectory,
-  restoreLocalDirectory,
-  writeLocalTextFile,
-  type LocalDirectoryHandle,
-  type LocalEntryHandle,
-  type LocalFileHandle,
-  type LocalTextFile,
-} from './local-file-system'
-import {
-  createLocalServerDirectory,
-  deleteLocalServerDirectory,
-  deleteLocalServerFile,
-  getLocalServerAssetUrl,
-  getLocalServerCapabilities,
-  openLocalServerWorkspace,
-  renameLocalServerFile,
-  reloadLocalServerWorkspace,
-  writeLocalServerFile,
-  type LocalServerSnapshot,
-  type LocalServerWorkspace,
-} from './local-server-file-system'
-import {
   isEditableTextFile,
   isImageFile,
   isWorkspaceFile,
@@ -103,7 +73,6 @@ import {
   serializeCsv,
 } from './csv-utils'
 import { CsvContextToolbar } from './csv-context-toolbar'
-import { pickLocalServerFolder } from './folder-picker'
 import { requestChoice } from './choice-dialog'
 import { createPortableMarkdown } from './portable-markdown'
 import {
@@ -112,6 +81,9 @@ import {
   type DocumentExportLayout,
 } from './document-export'
 import { createIcon, hydrateIcons, setIcon } from './icons'
+import { createEditorRuntime } from './editor-runtime'
+import { createRuntimeWorkspacePort } from './runtime-workspace-port'
+import type { WorkspaceSnapshot } from './workspace-port'
 
 // The examples are the dev workspace default. New storage versions prevent a
 // previous hard-coded demo from masking those files on the first run.
@@ -119,7 +91,6 @@ const STORAGE_KEY = 'milkdown-minimal-editor-draft-v3'
 const FILES_STORAGE_KEY = 'milkdown-editor-files-v4'
 const ACTIVE_FILE_KEY = 'milkdown-editor-active-file-v4'
 const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
-const LOCAL_SERVER_PATH_KEY = 'milkdown-editor-local-server-path-v1'
 const WORKSPACE_LAYOUT_KEY = 'milkdown-editor-workspace-layout-v1'
 const IMAGE_DRAG_MIME = 'application/x-office-md-image'
 
@@ -501,8 +472,7 @@ type WorkspaceFile = {
   name: string
   markdown: string
   kind: 'markdown' | 'css' | 'csv' | 'image'
-  source?: 'browser' | 'folder' | 'server'
-  handle?: LocalFileHandle
+  source?: 'browser' | 'disk'
 }
 
 const exampleMarkdownFiles = Object.entries(exampleMarkdownModules)
@@ -579,24 +549,30 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
         typeof (file as WorkspaceFile).name === 'string' &&
         typeof (file as WorkspaceFile).markdown === 'string',
       )
-      .map((file) => ({
-        ...file,
-        markdown:
-          file.kind === 'csv' || file.kind === 'css' ||
-          file.kind === 'image' || isImageFile(file.name) ||
-          file.name.toLowerCase().endsWith('.csv') ||
-          file.name.toLowerCase().endsWith('.css')
-            ? file.markdown
-            : normalizeMarkdownBreaks(file.markdown),
-        kind:
-          file.kind === 'image' || isImageFile(file.name)
-            ? 'image' as const
-            : file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
-            ? 'csv' as const
-            : file.kind === 'css' || file.name.toLowerCase().endsWith('.css')
-            ? 'css' as const
-            : 'markdown' as const,
-      }))
+      .map((file) => {
+        const storedSource = (file as { source?: unknown }).source
+        return {
+          ...file,
+          source: storedSource === 'disk' || storedSource === 'folder' || storedSource === 'server'
+            ? 'disk' as const
+            : 'browser' as const,
+          markdown:
+            file.kind === 'csv' || file.kind === 'css' ||
+            file.kind === 'image' || isImageFile(file.name) ||
+            file.name.toLowerCase().endsWith('.csv') ||
+            file.name.toLowerCase().endsWith('.css')
+              ? file.markdown
+              : normalizeMarkdownBreaks(file.markdown),
+          kind:
+            file.kind === 'image' || isImageFile(file.name)
+              ? 'image' as const
+              : file.kind === 'csv' || file.name.toLowerCase().endsWith('.csv')
+              ? 'csv' as const
+              : file.kind === 'css' || file.name.toLowerCase().endsWith('.css')
+              ? 'css' as const
+              : 'markdown' as const,
+        }
+      })
     return valid.length ? valid : fallbackFiles
   } catch {
     return fallbackFiles
@@ -606,6 +582,8 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
 const workspaceFiles = readWorkspaceFiles()
 const workspaceDirectories: string[] = []
 const imageObjectUrls = new Map<string, string>()
+const editorRuntime = createEditorRuntime(createRuntimeWorkspacePort())
+const workspaceApplication = editorRuntime.workspace
 
 const clearImageObjectUrls = () => {
   for (const url of imageObjectUrls.values()) URL.revokeObjectURL(url)
@@ -618,8 +596,6 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
   activeFileId = workspaceFiles[0]?.id ?? ''
 }
 
-let selectedDirectory: LocalDirectoryHandle | undefined
-let selectedServerWorkspace: LocalServerWorkspace | undefined
 let workspaceCacheUnavailable = false
 const dirtyDiskFiles = new Set<string>()
 const cleanMarkdownByFile = new Map<string, string>()
@@ -645,7 +621,7 @@ const runWorkspaceAction = async (action: () => Promise<unknown>) => {
   } finally {
     controls.forEach((control) => {
       control.disabled = control === newFolderButton
-        ? !selectedDirectory && !selectedServerWorkspace
+        ? !workspaceApplication.state.workspace
         : disabledState.get(control) ?? false
     })
     workspaceActionPending = false
@@ -660,35 +636,18 @@ const workspaceKindForName = (name: string): WorkspaceFile['kind'] => {
   return 'markdown'
 }
 
-const workspaceFilesFromDirectory = (
-  directory: LocalDirectoryHandle,
-  localFiles: LocalTextFile[],
-): WorkspaceFile[] => localFiles.map((file) => {
-  const kind = workspaceKindForName(file.name)
-  return {
-    id: `folder:${directory.name}/${file.name}`,
-    name: file.name,
-    markdown: kind === 'markdown'
-      ? normalizeMarkdownBreaks(file.markdown)
-      : file.markdown,
-    kind,
-    source: 'folder',
-    handle: file.handle,
-  }
-})
-
-const workspaceFilesFromServer = (
-  snapshot: LocalServerSnapshot,
+const workspaceFilesFromSnapshot = (
+  snapshot: WorkspaceSnapshot,
 ): WorkspaceFile[] => snapshot.files.map((file) => {
   const kind = workspaceKindForName(file.name)
   return {
-    id: `server:${snapshot.workspace.path}/${file.name}`,
+    id: `workspace:${snapshot.workspace.path}/${file.name}`,
     name: file.name,
     markdown: kind === 'markdown'
       ? normalizeMarkdownBreaks(file.markdown)
       : file.markdown,
     kind,
-    source: 'server',
+    source: 'disk',
   }
 })
 
@@ -715,7 +674,7 @@ const replaceWorkspaceFiles = (
 }
 
 const isDiskBackedFile = (file: WorkspaceFile | undefined) =>
-  file?.source === 'folder' || file?.source === 'server'
+  file?.source === 'disk' && Boolean(workspaceApplication.state.workspace)
 
 const findWorkspaceFile = (
   fileName: string,
@@ -798,17 +757,11 @@ const resolveWorkspaceImageSource = async (source: string) => {
   const reference = workspaceImageReference(source)
   if (!reference) return undefined
   const { file, suffix } = reference
-
-  if (file.source === 'server' && selectedServerWorkspace) {
-    return `${getLocalServerAssetUrl(selectedServerWorkspace.id, file.name)}${suffix}`
-  }
-
-  if (file.source !== 'folder') return undefined
+  if (file.source !== 'disk') return undefined
   let objectUrl = imageObjectUrls.get(file.id)
   if (!objectUrl) {
-    const handle = await resolveLocalFileHandle(file)
-    if (!handle) return undefined
-    objectUrl = URL.createObjectURL(await handle.getFile())
+    objectUrl = await workspaceApplication.readAssetUrl(file.name)
+    if (!objectUrl) return undefined
     imageObjectUrls.set(file.id, objectUrl)
   }
   return `${objectUrl}${suffix}`
@@ -821,7 +774,7 @@ configureMermaidCsvResolver(resolveWorkspaceCsv)
 
 const persistWorkspace = () => {
   if (!workspaceCacheUnavailable) {
-    const persistedFiles = workspaceFiles.map(({ handle: _handle, ...file }) => file)
+    const persistedFiles = workspaceFiles.map((file) => ({ ...file }))
     const serializedFiles = JSON.stringify(persistedFiles)
     try {
       window.localStorage.setItem(FILES_STORAGE_KEY, serializedFiles)
@@ -849,7 +802,7 @@ const activeFile = () =>
   workspaceFiles.find((file) => file.id === activeFileId) ?? workspaceFiles[0]
 
 const updateDocumentNameControls = (file = activeFile()) => {
-  const fallbackName = selectedDirectory || selectedServerWorkspace
+  const fallbackName = workspaceApplication.state.workspace
     ? 'No editable files'
     : 'untitled.md'
   const name = file?.name ?? fallbackName
@@ -960,90 +913,6 @@ const setStatus = (label: string, state: 'ready' | 'saving' | 'saved') => {
     status.setAttribute('aria-label', label)
   }
   statusDot.dataset.state = state
-}
-
-const findLocalFileHandle = async (
-  directory: LocalDirectoryHandle,
-  name: string,
-) => {
-  let currentDirectory = directory
-  const parts = name.split('/').filter(Boolean)
-
-  for (const [index, part] of parts.entries()) {
-    let match: LocalEntryHandle | undefined
-    for await (const [entryName, entry] of currentDirectory.entries()) {
-      if (entryName === part) {
-        match = entry
-        break
-      }
-    }
-    if (!match) return undefined
-    if (index === parts.length - 1) {
-      return match.kind === 'file' ? match : undefined
-    }
-    if (match.kind !== 'directory') return undefined
-    currentDirectory = match
-  }
-
-  return undefined
-}
-
-const resolveLocalFileHandle = async (file: WorkspaceFile) => {
-  if (file.handle && typeof file.handle.createWritable === 'function') {
-    return file.handle
-  }
-  file.handle = undefined
-  if (file.source !== 'folder' || !selectedDirectory) return undefined
-  const handle = await findLocalFileHandle(selectedDirectory, file.name)
-  if (handle) file.handle = handle
-  return handle
-}
-
-const reconnectLocalServerWorkspace = async () => {
-  const serverPath = window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
-  if (!serverPath) return undefined
-  const snapshot = await openLocalServerWorkspace(serverPath)
-  selectedServerWorkspace = snapshot.workspace
-  return snapshot
-}
-
-const writeServerBackedFile = async (file: WorkspaceFile) => {
-  let workspace = selectedServerWorkspace
-  if (!workspace) {
-    workspace = (await reconnectLocalServerWorkspace())?.workspace
-  }
-  if (!workspace) throw new Error('Open the local folder again before storing this file.')
-
-  try {
-    await writeLocalServerFile(workspace.id, file.name, file.markdown)
-  } catch (firstError) {
-    // Vite restarts invalidate its in-memory session id. Reopen the remembered
-    // path once, then retry the idempotent file write with the fresh session.
-    const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
-    if (!reconnected) throw firstError
-    await writeLocalServerFile(
-      reconnected.workspace.id,
-      file.name,
-      file.markdown,
-    )
-  }
-}
-
-const renameServerBackedFile = async (
-  oldName: string,
-  newName: string,
-) => {
-  let workspace = selectedServerWorkspace
-  if (!workspace) workspace = (await reconnectLocalServerWorkspace())?.workspace
-  if (!workspace) throw new Error('Open the local folder again before renaming this file.')
-
-  try {
-    await renameLocalServerFile(workspace.id, oldName, newName)
-  } catch (firstError) {
-    const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
-    if (!reconnected) throw firstError
-    await renameLocalServerFile(reconnected.workspace.id, oldName, newName)
-  }
 }
 
 const setDebugMarkdown = (markdown: string, force = false) => {
@@ -1801,53 +1670,12 @@ const setCsvStatus = (
 
 const saveDiskFile = async (
   file: WorkspaceFile,
-  options: { requestPermission?: boolean } = {},
+  _options: { requestPermission?: boolean } = {},
 ) => {
   if (!isDiskBackedFile(file)) return true
 
   try {
-    if (file.source === 'server') {
-      await writeServerBackedFile(file)
-      dirtyDiskFiles.delete(file.id)
-      cleanMarkdownByFile.set(file.id, file.markdown)
-      return true
-    }
-
-    if (!selectedDirectory && file.source === 'folder') {
-      selectedDirectory = await restoreLocalDirectory()
-    }
-    if (
-      selectedDirectory &&
-      !await ensureLocalPermission(
-        selectedDirectory,
-        'readwrite',
-        options.requestPermission ?? false,
-      )
-    ) {
-      throw new Error('Read and write permission is required for this folder.')
-    }
-
-    let handle = await resolveLocalFileHandle(file)
-    if (
-      !handle &&
-      file.source === 'folder' &&
-      selectedDirectory?.getFileHandle &&
-      !file.name.includes('/')
-    ) {
-      handle = await selectedDirectory.getFileHandle(file.name, { create: true })
-      file.handle = handle
-    }
-    if (!handle) {
-      if (file.source === 'folder') {
-        throw new Error(`Could not find ${file.name} in the open folder.`)
-      }
-      return true
-    }
-
-    await writeLocalTextFile(
-      { handle, markdown: file.markdown },
-      { requestPermission: options.requestPermission ?? false },
-    )
+    await workspaceApplication.saveFile(file.name, file.markdown)
     dirtyDiskFiles.delete(file.id)
     cleanMarkdownByFile.set(file.id, file.markdown)
     return true
@@ -1896,38 +1724,14 @@ const storeActiveFile = async () => {
 const reloadProject = async (editor: EditorInstance) => {
   const preferredFileName = activeFile()?.name
   try {
-    if (selectedServerWorkspace) {
-      setStatus('Reloading folder from disk…', 'saving')
-      if (folderStatus) {
-        folderStatus.textContent = `${selectedServerWorkspace.name} · reading disk…`
-      }
-      let snapshot: LocalServerSnapshot
-      try {
-        snapshot = await reloadLocalServerWorkspace(selectedServerWorkspace.id)
-      } catch (firstError) {
-        const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
-        if (!reconnected) throw firstError
-        snapshot = reconnected
-      }
-      await loadWorkspaceFromServer(snapshot, { editor, preferredFileName })
-      setStatus(`Reloaded ${snapshot.workspace.name} from disk`, 'saved')
-      setCsvStatus(`Reloaded ${snapshot.workspace.name} from disk`)
-      return true
-    }
-
-    const directory = selectedDirectory ?? await restoreLocalDirectory()
-    if (!directory) {
-      throw new Error('Open a folder before reloading from disk.')
-    }
     setStatus('Reloading folder from disk…', 'saving')
-    if (folderStatus) folderStatus.textContent = `${directory.name} · reading disk…`
-    await loadWorkspaceFromDirectory(directory, {
-      editor,
-      preferredFileName,
-      requestPermission: true,
-    })
-    setStatus(`Reloaded ${directory.name} from disk`, 'saved')
-    setCsvStatus(`Reloaded ${directory.name} from disk`)
+    if (folderStatus) {
+      folderStatus.textContent = `${workspaceApplication.state.workspace?.name ?? 'Workspace'} · reading disk…`
+    }
+    const snapshot = await workspaceApplication.reload()
+    await loadWorkspaceFromSnapshot(snapshot, { editor, preferredFileName })
+    setStatus(`Reloaded ${snapshot.workspace.name} from disk`, 'saved')
+    setCsvStatus(`Reloaded ${snapshot.workspace.name} from disk`)
     return true
   } catch (error) {
     console.error('Could not reload the folder from disk.', error)
@@ -2489,7 +2293,6 @@ const openFile = (editor: EditorInstance, fileId: string) => {
 const migrateRenamedFileIdentity = (
   file: WorkspaceFile,
   newName: string,
-  newHandle?: LocalFileHandle,
 ) => {
   const oldId = file.id
   const oldName = file.name
@@ -2499,7 +2302,6 @@ const migrateRenamedFileIdentity = (
 
   file.name = newName
   file.id = newId
-  if (newHandle) file.handle = newHandle
 
   if (activeFileId === oldId) activeFileId = newId
   if (lastMarkdownFileId === oldId) lastMarkdownFileId = newId
@@ -2559,21 +2361,9 @@ const renameFile = async (editor: EditorInstance, fileId: string) => {
 
   const oldName = file.name
   try {
-    let newHandle: LocalFileHandle | undefined
-    if (file.source === 'server') {
-      await renameServerBackedFile(oldName, newName)
-    } else if (file.source === 'folder') {
-      selectedDirectory ??= await restoreLocalDirectory()
-      if (!selectedDirectory) {
-        throw new Error('Open the local folder again before renaming this file.')
-      }
-      if (!await ensureLocalPermission(selectedDirectory, 'readwrite', true)) {
-        throw new Error('Read and write permission is required for this folder.')
-      }
-      newHandle = await renameLocalTextFile(selectedDirectory, oldName, newName)
-    }
+    if (isDiskBackedFile(file)) await workspaceApplication.renameFile(oldName, newName)
 
-    migrateRenamedFileIdentity(file, newName, newHandle)
+    migrateRenamedFileIdentity(file, newName)
     persistWorkspace()
     updateDocumentNameControls()
     renderFileList(editor)
@@ -2631,36 +2421,12 @@ const createNewFile = async (editor: EditorInstance) => {
       ? `# ${baseName.replace(/\.(?:md|markdown)$/i, '')}\n\n`
       : '',
     kind,
-    source: selectedServerWorkspace
-      ? 'server'
-      : selectedDirectory
-        ? 'folder'
-        : 'browser',
+    source: workspaceApplication.state.workspace ? 'disk' : 'browser',
   }
 
-  if (selectedServerWorkspace) {
+  if (workspaceApplication.state.workspace) {
     try {
-      await writeServerBackedFile(file)
-    } catch (error) {
-      console.error('Could not create local file.', error)
-      setStatus('Could not create folder file', 'ready')
-      return
-    }
-  } else if (selectedDirectory) {
-    if (name.includes('/')) {
-      setStatus('Create the file at the folder root', 'ready')
-      return
-    }
-    if (!selectedDirectory.getFileHandle) {
-      setStatus('This browser cannot create folder files', 'ready')
-      return
-    }
-    try {
-      file.handle = await selectedDirectory.getFileHandle(name, { create: true })
-      await writeLocalTextFile(
-        file as { handle: LocalFileHandle; markdown: string },
-        { requestPermission: true },
-      )
+      await workspaceApplication.saveFile(file.name, file.markdown)
     } catch (error) {
       console.error('Could not create local file.', error)
       setStatus('Could not create folder file', 'ready')
@@ -2674,22 +2440,6 @@ const createNewFile = async (editor: EditorInstance) => {
 }
 
 let customThemeStyle: HTMLStyleElement | undefined
-
-const runServerWorkspaceOperation = async (
-  operation: (workspaceId: string) => Promise<unknown>,
-) => {
-  let workspace = selectedServerWorkspace
-  if (!workspace) workspace = (await reconnectLocalServerWorkspace())?.workspace
-  if (!workspace) throw new Error('Open the local folder again before changing it.')
-
-  try {
-    await operation(workspace.id)
-  } catch (firstError) {
-    const reconnected = await reconnectLocalServerWorkspace().catch(() => undefined)
-    if (!reconnected) throw firstError
-    await operation(reconnected.workspace.id)
-  }
-}
 
 const requestWorkspaceDeletion = async (kind: 'file' | 'folder', name: string) => {
   const choice = await requestChoice({
@@ -2705,7 +2455,7 @@ const requestWorkspaceDeletion = async (kind: 'file' | 'folder', name: string) =
 }
 
 const createNewFolder = async () => {
-  if (!selectedDirectory && !selectedServerWorkspace) {
+  if (!workspaceApplication.state.workspace) {
     setStatus('Open a folder before creating folders.', 'ready')
     return false
   }
@@ -2729,18 +2479,7 @@ const createNewFolder = async () => {
   }
 
   try {
-    if (selectedServerWorkspace) {
-      await runServerWorkspaceOperation((workspaceId) =>
-        createLocalServerDirectory(workspaceId, name),
-      )
-    } else {
-      selectedDirectory ??= await restoreLocalDirectory()
-      if (!selectedDirectory) throw new Error('Open the local folder again before creating folders.')
-      if (!await ensureLocalPermission(selectedDirectory, 'readwrite', true)) {
-        throw new Error('Read and write permission is required for this folder.')
-      }
-      await createLocalDirectory(selectedDirectory, name)
-    }
+    await workspaceApplication.createDirectory(name)
 
     if (!workspaceDirectories.includes(name)) workspaceDirectories.push(name)
     workspaceDirectories.sort((left, right) => left.localeCompare(right))
@@ -2760,18 +2499,7 @@ const deleteWorkspaceFolder = async (editor: EditorInstance, name: string) => {
   if (!await requestWorkspaceDeletion('folder', name)) return false
 
   try {
-    if (selectedServerWorkspace) {
-      await runServerWorkspaceOperation((workspaceId) =>
-        deleteLocalServerDirectory(workspaceId, name),
-      )
-    } else {
-      selectedDirectory ??= await restoreLocalDirectory()
-      if (!selectedDirectory) throw new Error('Open the local folder again before deleting folders.')
-      if (!await ensureLocalPermission(selectedDirectory, 'readwrite', true)) {
-        throw new Error('Read and write permission is required for this folder.')
-      }
-      await deleteLocalDirectory(selectedDirectory, name)
-    }
+    await workspaceApplication.deleteDirectory(name)
 
     workspaceDirectories.splice(
       0,
@@ -2799,18 +2527,7 @@ const deleteWorkspaceFile = async (editor: EditorInstance, fileId: string) => {
   try {
     persistActiveCsv()
     if (file.id === activeCsvFileId) await flushCsvAutoSave()
-    if (file.source === 'server') {
-      await runServerWorkspaceOperation((workspaceId) =>
-        deleteLocalServerFile(workspaceId, file.name),
-      )
-    } else if (file.source === 'folder') {
-      selectedDirectory ??= await restoreLocalDirectory()
-      if (!selectedDirectory) throw new Error('Open the local folder again before deleting files.')
-      if (!await ensureLocalPermission(selectedDirectory, 'readwrite', true)) {
-        throw new Error('Read and write permission is required for this folder.')
-      }
-      await deleteLocalTextFile(selectedDirectory, file.name)
-    }
+    if (isDiskBackedFile(file)) await workspaceApplication.deleteFile(file.name)
 
     if (file.id === activeCsvFileId) destroyCsvEditor()
     if (customThemeStyle?.dataset.workspaceTheme === file.id) {
@@ -2969,63 +2686,8 @@ const activateWorkspaceFile = (editor: EditorInstance) => {
   openFile(editor, file.id)
 }
 
-const loadWorkspaceFromDirectory = async (
-  directory: LocalDirectoryHandle,
-  options: {
-    editor?: EditorInstance
-    preferredFileName?: string
-    requestPermission: boolean
-  },
-) => {
-  if (!await ensureLocalPermission(
-    directory,
-    'readwrite',
-    options.requestPermission,
-  )) {
-    throw new Error('Read and write permission is required for this folder.')
-  }
-
-  const localWorkspace = await readLocalWorkspace(directory)
-  const localFiles = localWorkspace.files
-  dirtyDiskFiles.clear()
-  cleanMarkdownByFile.clear()
-  if (options.editor && activeCsvWorksheet) destroyCsvEditor()
-  selectedServerWorkspace = undefined
-  selectedDirectory = directory
-  if (newFolderButton) newFolderButton.disabled = false
-  window.localStorage.removeItem(LOCAL_SERVER_PATH_KEY)
-  replaceWorkspaceFiles(
-    workspaceFilesFromDirectory(directory, localFiles),
-    options.preferredFileName,
-    localWorkspace.directories,
-  )
-  try {
-    await rememberLocalDirectory(directory)
-  } catch (error) {
-    // IndexedDB persistence is a convenience. The live handle remains usable.
-    console.warn('Could not remember the selected folder.', error)
-  }
-
-  if (folderStatus) {
-    folderStatus.textContent = localFiles.length
-      ? `${directory.name} · ${localFiles.length} files · disk-backed`
-      : `${directory.name} · empty folder · disk-backed`
-  }
-
-  if (options.editor) activateWorkspaceFile(options.editor)
-  const activeTheme = customThemeStyle?.dataset.workspaceTheme
-  if (activeTheme) {
-    const themeFile = workspaceFiles.find((file) => file.id === activeTheme)
-    if (themeFile?.kind === 'css') applyCssFile(themeFile)
-  }
-  await refreshEvaluatedCsvSources()
-  notifyMarkdownIncludesChanged()
-  notifyMermaidCsvDataChanged()
-  return localFiles.length
-}
-
-const loadWorkspaceFromServer = async (
-  snapshot: LocalServerSnapshot,
+const loadWorkspaceFromSnapshot = async (
+  snapshot: WorkspaceSnapshot,
   options: {
     editor?: EditorInstance
     preferredFileName?: string
@@ -3034,14 +2696,11 @@ const loadWorkspaceFromServer = async (
   dirtyDiskFiles.clear()
   cleanMarkdownByFile.clear()
   if (options.editor && activeCsvWorksheet) destroyCsvEditor()
-  selectedDirectory = undefined
-  selectedServerWorkspace = snapshot.workspace
   if (newFolderButton) newFolderButton.disabled = false
-  window.localStorage.setItem(LOCAL_SERVER_PATH_KEY, snapshot.workspace.path)
   replaceWorkspaceFiles(
-    workspaceFilesFromServer(snapshot),
+    workspaceFilesFromSnapshot(snapshot),
     options.preferredFileName,
-    snapshot.directories ?? [],
+    snapshot.directories,
   )
 
   if (folderStatus) {
@@ -3064,44 +2723,16 @@ const loadWorkspaceFromServer = async (
 }
 
 const restoreFolderWorkspace = async () => {
-  const serverPath = window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
-  if (serverPath && await getLocalServerCapabilities()) {
-    try {
-      const snapshot = await openLocalServerWorkspace(serverPath)
-      await loadWorkspaceFromServer(snapshot, {
-        preferredFileName: activeFile()?.name,
-      })
-      return true
-    } catch (error) {
-      console.warn('Could not restore the local server folder.', error)
-      if (folderStatus) {
-        folderStatus.textContent = 'Cached files only · open the folder to reconnect'
-      }
-    }
-  }
-
   try {
-    const directory = await restoreLocalDirectory()
-    if (!directory) {
-      if (
-        folderStatus &&
-        workspaceFiles.some((file) => isDiskBackedFile(file))
-      ) {
+    const snapshot = await workspaceApplication.restore()
+    if (!snapshot) {
+      if (folderStatus && workspaceFiles.some((file) => file.source === 'disk')) {
         folderStatus.textContent = 'Cached files only · open the folder to reconnect'
       }
       return false
     }
-    selectedDirectory = directory
-    const permission = await queryLocalPermission(directory, 'readwrite')
-    if (permission !== 'granted') {
-      if (folderStatus) {
-        folderStatus.textContent = `${directory.name} · use Reload to reconnect`
-      }
-      return false
-    }
-    await loadWorkspaceFromDirectory(directory, {
+    await loadWorkspaceFromSnapshot(snapshot, {
       preferredFileName: activeFile()?.name,
-      requestPermission: false,
     })
     return true
   } catch (error) {
@@ -3111,55 +2742,27 @@ const restoreFolderWorkspace = async () => {
   }
 }
 
-const canUseLocalServerBridge = () =>
-  import.meta.env.DEV || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
-
 const openLocalFolder = async (editor: EditorInstance) => {
   const preferredFileName = activeFile()?.name
   try {
     setStatus('Opening folder…', 'saving')
     if (folderStatus) folderStatus.textContent = 'Choose a folder…'
-    const capabilities = canUseLocalServerBridge()
-      ? await getLocalServerCapabilities()
-      : undefined
-    if (capabilities) {
-      const requestedPath = await pickLocalServerFolder(
-        window.localStorage.getItem(LOCAL_SERVER_PATH_KEY)
-          ?? capabilities.defaultPath,
-      )
-      if (!requestedPath) {
-        setStatus('Folder selection cancelled', 'ready')
-        if (folderStatus) {
-          folderStatus.textContent = selectedServerWorkspace
-            ? `${selectedServerWorkspace.name} · disk-backed`
-            : 'Browser-local files'
-        }
-        return
-      }
-
-      const snapshot = await openLocalServerWorkspace(requestedPath)
-      await loadWorkspaceFromServer(snapshot, { editor, preferredFileName })
-      setStatus(`Opened ${snapshot.workspace.name} from disk`, 'saved')
-      return
-    }
-
-    const directory = await pickLocalDirectory()
-    if (!directory) {
+    const snapshot = await workspaceApplication.open()
+    if (!snapshot) {
       setStatus('Folder selection cancelled', 'ready')
       if (folderStatus) {
-        folderStatus.textContent = selectedDirectory
-          ? `${selectedDirectory.name} · disk-backed`
+        folderStatus.textContent = workspaceApplication.state.workspace
+          ? `${workspaceApplication.state.workspace.name} · disk-backed`
           : 'Browser-local files'
       }
       return
     }
 
-    await loadWorkspaceFromDirectory(directory, {
+    await loadWorkspaceFromSnapshot(snapshot, {
       editor,
       preferredFileName,
-      requestPermission: true,
     })
-    setStatus(`Opened ${directory.name} from disk`, 'saved')
+    setStatus(`Opened ${snapshot.workspace.name} from disk`, 'saved')
   } catch (error) {
     console.error('Could not open local folder.', error)
     const message = error instanceof Error ? error.message : 'Folder access failed.'
@@ -3180,7 +2783,7 @@ const startEditor = async () => {
   }
   if (currentMarkdownFile) lastMarkdownFileId = currentMarkdownFile.id
   const currentMarkdown = currentMarkdownFile?.markdown
-    ?? (selectedDirectory || selectedServerWorkspace ? '' : initialMarkdown)
+    ?? (workspaceApplication.state.workspace ? '' : initialMarkdown)
   setStatus(
     isDiskBackedFile(currentMarkdownFile)
       ? 'Loaded from disk'

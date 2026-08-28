@@ -366,5 +366,6 @@ const localFilesystemBridge = (): Plugin => ({
 })
 
 export default defineConfig({
+  base: './',
   plugins: [localFilesystemBridge()],
 })

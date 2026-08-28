@@ -1,0 +1,61 @@
+schema: spec-driven
+
+context: |
+  Product: office.md is a local-first Markdown and CSV editor. An opened folder
+  is treated as a small document project containing Markdown, CSV, CSS, and
+  workspace image files.
+
+  Stack: TypeScript, Vite, Milkdown/ProseMirror, Vitest with jsdom, and
+  Playwright. Application code lives in src/, unit tests in tests/unit/, and
+  browser workflows in tests/e2e/.
+
+  Source of truth: stable product behavior is documented in
+  openspec/specs/. A proposed change lives in openspec/changes/ until it has
+  been implemented, verified, synced into the main specs, and archived.
+  requirements.md is a retained bootstrap checklist, not the source of truth.
+
+  Quality: behavior is tested through public interfaces. New behavior and bug
+  fixes use a red-green-refactor loop, one vertical slice at a time. Expected
+  values in tests must come from the relevant specification or a known-good
+  example, not from reimplementing the production algorithm in the assertion.
+
+  Product constraints: Markdown and CSV includes use ![[file]] syntax; only
+  Markdown and CSV can be included. CSV formulas remain formulas in editable
+  and stored source, while previews and exports may use evaluated values.
+  Local filesystem operations must reject hidden paths, path traversal,
+  overwrites, and unsafe directory deletion.
+
+  Documentation: use the repository's existing English terminology in specs,
+  tests, and code. Update CONTEXT.md when domain terms are clarified and add an
+  ADR only for a hard-to-reverse, surprising decision that involved a real
+  trade-off.
+
+rules:
+  proposal:
+    - State the user-visible outcome and the problem it solves.
+    - Include explicit non-goals and identify the affected main specs.
+    - Keep the proposal implementation-independent unless a constraint makes a technical choice necessary.
+  specs:
+    - Write testable requirements using SHALL and concrete WHEN/THEN scenarios.
+    - Preserve existing behavior and scenarios when modifying a requirement; add the regression case explicitly.
+    - Cover failure, boundary, and persistence behavior when it is part of the public contract.
+  design:
+    - Explain the chosen approach, the important seams, and meaningful alternatives.
+    - Keep implementation details subordinate to the behavior and constraints in the specs.
+  tasks:
+    - Group work into small vertical slices that each name the requirement and test seam they cover.
+    - Put the failing test before the minimal implementation in every behavior slice.
+    - Include the verification command or evidence expected for each non-trivial task.
+
+operations:
+  apply:
+    guidance:
+      - Read every artifact reported by openspec instructions before editing code.
+      - Work one task at a time: red test, minimal green implementation, then record the completed task.
+      - Run the narrowest relevant test after each slice and the full unit suite before completion.
+      - If implementation reveals a mismatch, update the change artifacts before expanding code scope.
+  archive:
+    guidance:
+      - Validate all active and main specs before archiving.
+      - Confirm that completed behavior is represented in the main specs and that no task is left unchecked.
+      - Run npm test and npm run build before declaring the change ready.

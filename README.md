@@ -1,6 +1,6 @@
 # office.md
 
-office.md is a local-first Markdown and CSV editor built with Milkdown. It treats an opened folder as a small document project: Markdown files can include other Markdown or CSV files, Mermaid diagrams can read cells and ranges from CSV, document CSS is scoped to the rendered page, and explicit Store/Reload actions synchronize with the real filesystem.
+office.md is a local-first Markdown and CSV editor built with Milkdown. It treats an opened folder as a small document project: Markdown files can include other Markdown or CSV files, Mermaid diagrams can read cells and ranges from CSV, document CSS is scoped to the rendered page, and explicit Store/Reload actions synchronize with the real filesystem. The same renderer and application runtime can run as a web app or an Electron desktop app.
 
 ## Features
 
@@ -36,9 +36,23 @@ C:\Users\me\project
 
 The bridge reads and writes `.md`, `.markdown`, `.css`, and `.csv` files below the selected folder. Hidden files and directories, binary files, `.git`, `node_modules`, and `dist` are ignored. When the app is hosted without the local Vite bridge, it falls back to the browser File System Access API where supported.
 
-Edits are kept in browser state until **Store** is clicked. **Reload** discards cached project data and reads the folder again from disk.
+In a disk-backed project, edits are autosaved while you work; **Store** forces an immediate write. **Reload** discards cached project data and reads the folder again from disk.
 
 Use **New Folder** to create a visible folder inside the open workspace. The trash actions in the Files panel delete supported files and empty folders; folders containing files must be emptied first.
+
+### Run the desktop target
+
+The Electron target loads the same Vite renderer and supplies disk access through a narrow, validated preload bridge. The renderer runs with context isolation and without Node integration.
+
+```bash
+# Development/build check for the web renderer plus Electron main/preload files
+npm run build:electron
+
+# Build and launch the desktop app
+npm run electron:start
+```
+
+The desktop app opens local folders through the native folder dialog. Workspace files remain the source of truth; no desktop-only document database is introduced. VS Code integration is intentionally deferred.
 
 ## Project syntax
 
@@ -133,11 +147,14 @@ The test suite checks behavior and external side effects, not only rendered cont
 # Unit and DOM integration tests
 npm test
 
-# Browser tests with real temporary folders and downloads
+# Browser and Electron tests with real temporary folders and downloads
 npm run test:e2e
 
 # Everything
 npm run test:all
+
+# OpenSpec structure and active changes
+npm run spec:validate
 ```
 
 The browser suite automatically uses `/snap/bin/chromium` when available. Else install Playwright Chromium:
@@ -157,15 +174,37 @@ Coverage includes CSV parsing and serialization, Mermaid range expansion, portab
 ## Build
 
 ```bash
+# Web production build
 npm run build
+
+# Web renderer plus Electron main/preload build
+npm run build:electron
+
+# Serve the web production build
 npm run preview
 ```
 
-The production output is written to `dist/`. A static deployment can edit browser-local projects, while unrestricted path-based disk access remains intentionally available only through the local Vite server.
+The web production output is written to `dist/`; Electron entry points are written to the ignored `dist-electron/` directory. A static deployment can edit browser-local projects, while unrestricted path-based disk access remains intentionally available only through the local Vite server or the Electron main process.
+
+## Development workflow
+
+Product behavior is specified in [`openspec/specs/`](openspec/specs/), and each feature or bug fix is planned in an active change under [`openspec/changes/`](openspec/changes/). The repository uses OpenSpec with TDD:
+
+1. Start with `$grill-with-docs` when the design or terminology is still fuzzy; record clarified terms in `CONTEXT.md` and durable trade-offs as ADRs.
+2. Use `$openspec-explore` for investigation, then `$openspec-propose` to create a reviewable proposal, specs, design, and task list.
+3. Review and correct the artifacts before implementation. Apply them with `$openspec-apply-change` using a red-green-refactor loop.
+4. Run `$openspec-verify-change`, sync the completed spec deltas, and archive with `$openspec-archive-change`.
+
+The full contributor routine and runtime layering are documented in [`docs/development-workflow.md`](docs/development-workflow.md). OpenSpec `1.11.0` is pinned for repository validation; the matching CLI is also required globally for the Codex workflow skills.
 
 ## Source map
 
-- `src/main.ts` — workspace orchestration and editor integration.
+- `src/main.ts` — shared renderer/editor integration and UI orchestration.
+- `src/workspace-application.ts` and `src/editor-runtime.ts` — host-neutral workspace actions and runtime composition.
+- `src/workspace-port.ts` — public workspace capability contract and deterministic test fake.
+- `src/web-workspace-port.ts` — local Vite bridge and browser File System Access adapters.
+- `src/electron-workspace-port.ts` — renderer-side adapter for the secure Electron bridge.
+- `electron/main.ts`, `electron/preload.ts`, and `electron/workspace-service.ts` — desktop shell, allowlisted IPC bridge, and validated filesystem service.
 - `src/plugins/` — Milkdown views for Mermaid, includes, LaTeX, rich content, and page layout.
 - `src/csv-utils.ts` — CSV parser, serializer, Markdown conversion, and Mermaid expansion.
 - `src/local-file-system.ts` — browser File System Access implementation.
