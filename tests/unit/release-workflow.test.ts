@@ -26,6 +26,15 @@ describe('Electron release workflow contract', () => {
     expect(workflow).toContain('windows-latest')
   })
 
+  it('builds Electron entry points before running the Electron E2E test', () => {
+    const electronBuild = workflow.indexOf('run: npm run build:electron')
+    const endToEndTests = workflow.indexOf('run: npm run test:e2e')
+
+    expect(electronBuild).toBeGreaterThan(-1)
+    expect(endToEndTests).toBeGreaterThan(-1)
+    expect(electronBuild).toBeLessThan(endToEndTests)
+  })
+
   it('keeps package jobs read-only and publishes a complete draft release', () => {
     expect(workflow).toContain('release:publish')
     expect(workflow).toMatch(/--publish\s+never/)

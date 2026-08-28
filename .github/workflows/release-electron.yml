@@ -43,14 +43,14 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Build Electron entry points
+        run: npm run build:electron
+
       - name: Run browser and Electron tests
         run: npm run test:e2e
 
       - name: Build production renderer
         run: npm run build
-
-      - name: Build Electron entry points
-        run: npm run build:electron
 
       - name: Validate OpenSpec
         run: npm run spec:validate
