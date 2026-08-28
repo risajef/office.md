@@ -17,7 +17,7 @@ office.md is a local-first Markdown and CSV editor built with Milkdown. It treat
 
 ## Run locally
 
-Requirements: Node.js 20 or newer and npm.
+Requirements: Node.js 22.22.2 or newer and npm.
 
 ```bash
 npm install
