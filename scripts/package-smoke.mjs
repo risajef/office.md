@@ -18,7 +18,7 @@ const unpackedDirectory = process.env.PACKAGED_APP_DIR
       process.platform === 'win32' ? 'win-unpacked' : 'linux-unpacked',
     )
 const executableName = process.platform === 'win32'
-  ? 'milkdown-minimal-editor.exe'
+  ? 'office.md.exe'
   : 'milkdown-minimal-editor'
 const executablePath = process.env.PACKAGED_APP_PATH
   ? path.resolve(process.env.PACKAGED_APP_PATH)

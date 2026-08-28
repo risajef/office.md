@@ -10,6 +10,10 @@ const electronBuildScript = readFileSync(
   path.resolve('scripts/build-electron.mjs'),
   'utf8',
 )
+const packageSmokeScript = readFileSync(
+  path.resolve('scripts/package-smoke.mjs'),
+  'utf8',
+)
 const builderConfig = JSON.parse(
   readFileSync(path.resolve('electron-builder.json'), 'utf8'),
 ) as {
@@ -57,5 +61,10 @@ describe('Electron packaging configuration', () => {
   it('keeps local packaging non-publishing by default', () => {
     expect(packageJson.scripts?.['package:electron'])
       .toContain('--publish never')
+  })
+
+  it('checks the executable names emitted for each package platform', () => {
+    expect(packageSmokeScript).toContain("'office.md.exe'")
+    expect(packageSmokeScript).toContain("'milkdown-minimal-editor'")
   })
 })
