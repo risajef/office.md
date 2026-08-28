@@ -92,7 +92,7 @@ jobs:
         run: npm run release:check-version
 
       - name: Build non-publishing platform package
-        run: npm run package:electron -- ${{ matrix.target }} --x64 --publish never
+        run: npm run package:electron -- ${{ matrix.target }} --x64
 
       - name: Smoke-test the packaged application on Linux
         if: runner.os == 'Linux'

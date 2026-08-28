@@ -35,9 +35,17 @@ describe('Electron release workflow contract', () => {
     expect(electronBuild).toBeLessThan(endToEndTests)
   })
 
+  it('does not duplicate the package script publish policy', () => {
+    const packagingCommand = workflow.match(
+      /run: npm run package:electron[^\n]*/,
+    )?.[0]
+
+    expect(packagingCommand)
+      .toBe('run: npm run package:electron -- ${{ matrix.target }} --x64')
+  })
+
   it('keeps package jobs read-only and publishes a complete draft release', () => {
     expect(workflow).toContain('release:publish')
-    expect(workflow).toMatch(/--publish\s+never/)
     expect(workflow).toMatch(/permissions:\s*\n\s+contents:\s+read/)
     expect(workflow).toMatch(/publish:\s*[\s\S]*?permissions:\s*\n\s+contents:\s+write/)
     expect(publisher).toMatch(/'release'[\s\S]*?'create'[\s\S]*?'--draft'/)

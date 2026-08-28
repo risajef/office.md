@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest'
 
 const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')) as {
   main?: string
+  scripts?: Record<string, string>
 }
+const electronBuildScript = readFileSync(
+  path.resolve('scripts/build-electron.mjs'),
+  'utf8',
+)
 const builderConfig = JSON.parse(
   readFileSync(path.resolve('electron-builder.json'), 'utf8'),
 ) as {
@@ -41,5 +46,16 @@ describe('Electron packaging configuration', () => {
       'dist/**',
       'dist-electron/**',
     ]))
+  })
+
+  it('runs npm command wrappers through the Windows shell', () => {
+    expect(electronBuildScript).toContain(
+      "shell: process.platform === 'win32'",
+    )
+  })
+
+  it('keeps local packaging non-publishing by default', () => {
+    expect(packageJson.scripts?.['package:electron'])
+      .toContain('--publish never')
   })
 })
