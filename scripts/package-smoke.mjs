@@ -80,6 +80,8 @@ try {
   const context = browser.contexts()[0]
   if (!context) throw new Error('The packaged Electron application has no browser context.')
   const page = context.pages()[0] ?? await context.waitForEvent('page', { timeout: 30_000 })
+  await page.locator('#startup-choice').waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator('#startup-open-folder').click({ timeout: 30_000 })
   await page.locator('#editor').waitFor({ state: 'visible', timeout: 30_000 })
   await page.locator('#folder-status').waitFor({ state: 'visible', timeout: 30_000 })
   const bridgeAvailable = await page.evaluate(() => Boolean(globalThis.officeMd?.workspace))
