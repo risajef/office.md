@@ -1,8 +1,10 @@
-import type { WorkspaceSnapshot } from './workspace-port'
+import type { WorkspaceFileSelection, WorkspaceSnapshot } from './workspace-port'
 import type { UpdateState } from './electron-update'
+import type { StyleFolderSnapshot } from './style-folder-port'
 
 export const ELECTRON_WORKSPACE_CHANNELS = {
   open: 'workspace:open',
+  openFile: 'workspace:open-file',
   restore: 'workspace:restore',
   reload: 'workspace:reload',
   readFile: 'workspace:read-file',
@@ -15,7 +17,8 @@ export const ELECTRON_WORKSPACE_CHANNELS = {
 } as const
 
 export type ElectronWorkspaceApi = {
-  open: () => Promise<WorkspaceSnapshot | undefined>
+  open: (startingLocation?: string) => Promise<WorkspaceSnapshot | undefined>
+  openFile: (startingLocation?: string) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
   reload: (workspaceId: string) => Promise<WorkspaceSnapshot>
   readFile: (workspaceId: string, name: string) => Promise<string>
@@ -25,6 +28,20 @@ export type ElectronWorkspaceApi = {
   createDirectory: (workspaceId: string, name: string) => Promise<void>
   deleteFile: (workspaceId: string, name: string) => Promise<void>
   deleteDirectory: (workspaceId: string, name: string) => Promise<void>
+}
+
+export const ELECTRON_STYLE_FOLDER_CHANNELS = {
+  open: 'style-folder:open',
+  restore: 'style-folder:restore',
+  reload: 'style-folder:reload',
+  readFile: 'style-folder:read-file',
+} as const
+
+export type ElectronStyleFolderApi = {
+  open: () => Promise<StyleFolderSnapshot | undefined>
+  restore: () => Promise<StyleFolderSnapshot | undefined>
+  reload: (folderId: string) => Promise<StyleFolderSnapshot>
+  readFile: (folderId: string, name: string) => Promise<string>
 }
 
 export const ELECTRON_UPDATE_CHANNELS = {
@@ -46,9 +63,10 @@ export type ElectronUpdateApi = {
 }
 
 declare global {
-  interface Window {
+    interface Window {
     officeMd?: {
       workspace?: ElectronWorkspaceApi
+      styleFolder?: ElectronStyleFolderApi
       updates?: ElectronUpdateApi
     }
   }

@@ -94,9 +94,10 @@ const openWorkspace = async (page: Page, directory: string) => {
   await page.goto('/')
   await page.evaluate(() => window.localStorage.clear())
   await page.reload()
-  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 20_000 })
+  const startupChoice = page.locator('#startup-choice')
+  await expect(startupChoice).toBeVisible({ timeout: 20_000 })
 
-  await page.locator('#open-folder').click()
+  await startupChoice.getByRole('button', { name: 'Open folder' }).click()
   const dialog = page.locator('.folder-picker-dialog')
   await expect(dialog).toBeVisible()
   const pathInput = dialog.getByLabel('Folder path')
@@ -109,6 +110,8 @@ const openWorkspace = async (page: Page, directory: string) => {
   await openButton.click()
 
   await expect(page.locator('#folder-status')).toContainText('disk-backed')
+  await expect(page.locator('#document-name')).toHaveText('data.csv')
+  await page.locator('.file-select[title="Open document.md"]').click()
   await expect(page.locator('#document-name')).toHaveText('document.md')
   await expect(page).toHaveTitle('document.md')
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute(
@@ -141,6 +144,108 @@ const test = base.extend<{ workspace: Workspace }>({
       await rm(workspace.directory, { recursive: true, force: true })
     }
   }, { auto: true }],
+})
+
+base('asks where to work before restoring the previous workspace', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  try {
+    await page.goto('/')
+    await page.evaluate((path) => {
+      window.localStorage.setItem('milkdown-editor-local-server-path-v1', path)
+    }, workspace.directory)
+    await page.reload()
+
+    const startupChoice = page.locator('#startup-choice')
+    await expect(startupChoice).toBeVisible({ timeout: 20_000 })
+    await expect(startupChoice.getByRole('button', { name: 'Open folder' })).toBeVisible()
+    await expect(startupChoice.getByRole('button', { name: 'Open file' })).toBeVisible()
+    await expect(page.locator('.workspace-layout')).toBeHidden()
+
+    await startupChoice.getByRole('button', { name: 'Open folder' }).click()
+    const picker = page.locator('.folder-picker-dialog')
+    await expect(picker).toBeVisible()
+    await expect(picker.getByLabel('Folder path')).toHaveValue(workspace.directory)
+    await picker.locator('.folder-picker-footer .dialog-secondary').click()
+    await expect(startupChoice).toBeVisible()
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+  }
+})
+
+base('opens a selected Markdown or CSV file from its immediate parent', async ({ page }) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'office-md-open-file-e2e-'))
+  const nested = path.join(directory, 'nested')
+  await mkdir(nested)
+  await writeFile(path.join(directory, 'readme.txt'), 'unsupported')
+  await writeFile(path.join(directory, 'theme.css'), 'unsupported')
+  await writeFile(path.join(directory, 'root.md'), '# Root document\n')
+  await writeFile(path.join(nested, 'table.csv'), 'name,value\nAlpha,1\n')
+  await writeFile(path.join(nested, 'note.markdown'), '# Nested note\n')
+
+  try {
+    await page.goto('/')
+    await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 20_000 })
+    await page.locator('#startup-open-file').click()
+
+    const folderPicker = page.locator('.folder-picker-dialog')
+    await expect(folderPicker).toBeVisible()
+    const folderPath = folderPicker.getByLabel('Folder path')
+    await folderPath.fill(directory)
+    await folderPath.press('Enter')
+    await expect(folderPath).toHaveValue(directory)
+    await folderPicker.getByRole('button', { name: 'Open this folder' }).click()
+
+    const filePicker = page.locator('.choice-dialog')
+    await expect(filePicker).toBeVisible()
+    await expect(filePicker.getByRole('option')).toHaveText([
+      'nested/note.markdown',
+      'nested/table.csv',
+      'root.md',
+    ])
+    await filePicker.getByRole('option', { name: 'nested/note.markdown' }).click()
+
+    await expect(page.locator('#folder-status')).toContainText('nested · 2 files · disk-backed')
+    await expect(page.locator('#document-name')).toHaveText('note.markdown')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue('# Nested note\n')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+base('opens a folder at its first visible editable file, or with no active file', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  const emptyWorkspace = await mkdtemp(path.join(tmpdir(), 'office-md-no-editable-e2e-'))
+  await writeFile(path.join(emptyWorkspace, 'notes.txt'), 'not editable')
+  await writeFile(path.join(emptyWorkspace, 'theme.css'), 'body {}')
+
+  const selectFolder = async (directory: string) => {
+    await page.goto('/')
+    await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 20_000 })
+    await page.locator('#startup-open-folder').click()
+    const dialog = page.locator('.folder-picker-dialog')
+    const folderPath = dialog.getByLabel('Folder path')
+    await folderPath.fill(directory)
+    await folderPath.press('Enter')
+    await expect(folderPath).toHaveValue(directory)
+    await dialog.getByRole('button', { name: 'Open this folder' }).click()
+  }
+
+  try {
+    await selectFolder(workspace.directory)
+    await expect(page.locator('#document-name')).toHaveText('data.csv')
+    await expect(page.locator('.file-row.is-active .file-select')).toHaveAttribute(
+      'title',
+      'Open data.csv',
+    )
+
+    await selectFolder(emptyWorkspace)
+    await expect(page.locator('#document-name')).toHaveText('No editable files')
+    await expect(page.locator('.file-row.is-active')).toHaveCount(0)
+    await expect(page.locator('.ProseMirror')).toBeEmpty()
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+    await rm(emptyWorkspace, { recursive: true, force: true })
+  }
 })
 
 base.describe('local filesystem bridge', () => {
@@ -314,6 +419,88 @@ base.describe('local filesystem bridge', () => {
 })
 
 test.describe('disk-backed editor workflows', () => {
+  test('uses an independent read-only style folder without changing the document workspace', async ({
+    page,
+    workspace,
+  }) => {
+    const styles = await mkdtemp(path.join(tmpdir(), 'office-md-style-e2e-'))
+    const externalCss = `.editor-wrap .ProseMirror { color: rgb(191, 61, 61); }\n`
+    await writeFile(path.join(styles, 'external.css'), externalCss)
+    await writeFile(path.join(styles, 'readme.txt'), 'not a theme')
+    await mkdir(path.join(styles, 'nested'))
+    await writeFile(path.join(styles, 'nested', '.hidden.css'), 'hidden')
+
+    try {
+      const sourceBefore = await page.locator('#debug-markdown-content').inputValue()
+      const documentNameBefore = await page.locator('#document-name').textContent()
+
+      await page.locator('#open-style-folder').click()
+      const dialog = page.locator('.folder-picker-dialog')
+      await expect(dialog).toBeVisible()
+      const pathInput = dialog.getByLabel('Folder path')
+      await pathInput.fill(styles)
+      await pathInput.press('Enter')
+      await expect(pathInput).toHaveValue(styles)
+      await dialog.getByRole('button', { name: 'Use this style folder' }).click()
+
+      await expect(page.locator('#style-folder-status')).toContainText('1 CSS themes')
+      await expect(page.locator('.style-theme-select[data-theme-origin="style-folder"]'))
+        .toHaveCount(1)
+      await expect(page.locator('#file-list')).not.toContainText('external.css')
+      await expect(page.locator('#document-name')).toHaveText(documentNameBefore as string)
+      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
+
+      await page.locator('.style-theme-select[data-theme-origin="style-folder"]').click()
+      await expect.poll(() => page.locator('style[data-theme-origin="style-folder"]').count())
+        .toBe(1)
+      const applied = await page.locator('style[data-theme-origin="style-folder"]').textContent()
+      expect(applied).toContain('rgb(191, 61, 61)')
+      const selectors = await page.locator('style[data-theme-origin="style-folder"]').evaluate(
+        (style) => Array.from(style.sheet?.cssRules ?? []).map((rule) => rule.cssText),
+      )
+      expect(selectors.join(' ')).toContain('.editor-wrap')
+
+      const downloadPromise = page.waitForEvent('download')
+      await page.locator('.editor-card [data-file-export]').click()
+      await page.getByRole('option', { name: 'HTML' }).click()
+      const download = await downloadPromise
+      const downloadedHtml = await readFile((await download.path()) as string, 'utf8')
+      expect(downloadedHtml).toContain('rgb(191, 61, 61)')
+      expect(downloadedHtml).not.toContain(styles)
+
+      await page.locator('.style-theme-select[data-theme-origin="workspace"]').click()
+      await expect(page.locator('style[data-theme-origin="workspace"]')).toHaveCount(1)
+      await expect(page.locator('style[data-theme-origin="style-folder"]')).toHaveCount(0)
+      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
+    } finally {
+      await rm(styles, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps editing available when an empty selected style folder disappears', async ({
+    page,
+  }) => {
+    const styles = await mkdtemp(path.join(tmpdir(), 'office-md-empty-style-e2e-'))
+    const sourceBefore = await page.locator('#debug-markdown-content').inputValue()
+
+    try {
+      await page.locator('#open-style-folder').click()
+      const dialog = page.locator('.folder-picker-dialog')
+      await dialog.getByLabel('Folder path').fill(styles)
+      await dialog.getByLabel('Folder path').press('Enter')
+      await dialog.getByRole('button', { name: 'Use this style folder' }).click()
+      await expect(page.locator('#style-folder-status')).toContainText('No CSS themes found')
+
+      await rm(styles, { recursive: true, force: true })
+      await page.locator('.editor-card [data-project-action="reload"]').click()
+      await expect(page.locator('#style-folder-status')).toContainText('unavailable')
+      await expect(page.locator('.ProseMirror')).toBeVisible()
+      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
+    } finally {
+      await rm(styles, { recursive: true, force: true })
+    }
+  })
+
   test('autosaves to disk, and Reload rereads disk', async ({
     page,
     workspace,

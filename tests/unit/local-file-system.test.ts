@@ -4,6 +4,7 @@ import {
   deleteLocalDirectory,
   deleteLocalTextFile,
   readLocalWorkspace,
+  readLocalStyleFolder,
   readLocalTextFiles,
   renameLocalTextFile,
   writeLocalTextFile,
@@ -12,6 +13,7 @@ import {
   type LocalFileHandle,
 } from '../../src/local-file-system'
 import {
+  isEditableDocumentFile,
   isEditableTextFile,
   isImageFile,
   isWorkspaceFile,
@@ -92,6 +94,12 @@ describe('editable file filtering', () => {
     expect(isEditableTextFile('photo.png')).toBe(false)
     expect(isEditableTextFile('report.pdf')).toBe(false)
     expect(isEditableTextFile('font.woff2')).toBe(false)
+    expect(isEditableDocumentFile('README.md')).toBe(true)
+    expect(isEditableDocumentFile('README.markdown')).toBe(true)
+    expect(isEditableDocumentFile('data.CSV')).toBe(true)
+    expect(isEditableDocumentFile('theme.css')).toBe(false)
+    expect(isEditableDocumentFile('notes.txt')).toBe(false)
+    expect(isEditableDocumentFile('.secret.md')).toBe(false)
     expect(isImageFile('photo.png')).toBe(true)
     expect(isImageFile('private/.photo.png')).toBe(false)
     expect(isWorkspaceFile('photo.png')).toBe(true)
@@ -132,6 +140,27 @@ describe('File System Access operations', () => {
       expect.objectContaining({ name: 'notes/detail.md', markdown: 'Detail' }),
       expect.objectContaining({ name: 'README.md', markdown: '# Read me' }),
     ])
+  })
+
+  it('reads only visible CSS themes from a nested read-only folder', async () => {
+    const root = new MemoryDirectory('styles')
+    const nested = new MemoryDirectory('nested')
+    const generated = new MemoryDirectory('node_modules')
+    root.entriesMap.set('paper.css', new MemoryFile('paper.css', 'paper'))
+    root.entriesMap.set('notes.txt', new MemoryFile('notes.txt', 'ignored'))
+    root.entriesMap.set('.hidden.css', new MemoryFile('.hidden.css', 'ignored'))
+    root.entriesMap.set('nested', nested)
+    root.entriesMap.set('node_modules', generated)
+    nested.entriesMap.set('dusk.CSS', new MemoryFile('dusk.CSS', 'dusk'))
+    nested.entriesMap.set('.private.css', new MemoryFile('.private.css', 'ignored'))
+    generated.entriesMap.set('dependency.css', new MemoryFile('dependency.css', 'ignored'))
+
+    await expect(readLocalStyleFolder(root)).resolves.toEqual({
+      files: [
+        { name: 'nested/dusk.CSS', contents: 'dusk' },
+        { name: 'paper.css', contents: 'paper' },
+      ],
+    })
   })
 
   it('lists directories and creates or deletes empty entries', async () => {

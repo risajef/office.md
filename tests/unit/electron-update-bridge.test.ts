@@ -23,9 +23,10 @@ describe('Electron update bridge contract', () => {
     expect(main).not.toMatch(/setFeedURL\(|addAuthHeader\(|auth.?token/)
   })
 
-  it('preserves the existing workspace bridge alongside the update bridge', () => {
-    expect(preload).toContain('contextBridge.exposeInMainWorld(\'officeMd\', { workspace, updates })')
+  it('preserves the existing workspace and style-folder bridges alongside updates', () => {
+    expect(preload).toContain('contextBridge.exposeInMainWorld(\'officeMd\', { workspace, styleFolder, updates })')
     expect(main).toContain('ELECTRON_WORKSPACE_CHANNELS.open')
     expect(main).toContain('ELECTRON_WORKSPACE_CHANNELS.deleteDirectory')
+    expect(main).toContain('ELECTRON_STYLE_FOLDER_CHANNELS.open')
   })
 })

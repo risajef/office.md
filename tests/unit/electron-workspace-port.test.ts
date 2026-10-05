@@ -15,6 +15,7 @@ const createSnapshot = (name = 'desktop-project'): WorkspaceSnapshot => ({
 
 const createApi = (): ElectronWorkspaceApi => ({
   open: vi.fn(async () => createSnapshot()),
+  openFile: vi.fn(async () => ({ snapshot: createSnapshot(), fileName: 'notes.md' })),
   restore: vi.fn(async () => createSnapshot()),
   reload: vi.fn(async () => createSnapshot('reloaded-project')),
   readFile: vi.fn(async () => '# Read\n'),
@@ -27,6 +28,44 @@ const createApi = (): ElectronWorkspaceApi => ({
 })
 
 describe('Electron workspace port', () => {
+  it('starts future folder selections at the last opened location', async () => {
+    const api = createApi()
+    const entries = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => { entries.set(key, value) },
+      removeItem: (key: string) => { entries.delete(key) },
+    }
+    const port = createElectronWorkspacePort(api, storage)
+
+    await port.open()
+    expect(entries.get('milkdown-editor-workspace-location-v1'))
+      .toBe('/tmp/desktop-project')
+
+    await port.open()
+    expect(api.open).toHaveBeenLastCalledWith('/tmp/desktop-project')
+  })
+
+  it('starts future file selections at the selected file parent and activates that file', async () => {
+    const api = createApi()
+    const entries = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => { entries.set(key, value) },
+      removeItem: (key: string) => { entries.delete(key) },
+    }
+    const port = createElectronWorkspacePort(api, storage)
+
+    const selected = await port.openFile(async () => undefined)
+    expect(selected?.fileName).toBe('notes.md')
+    expect(port.workspace?.path).toBe('/tmp/desktop-project')
+    expect(entries.get('milkdown-editor-workspace-location-v1'))
+      .toBe('/tmp/desktop-project')
+
+    await port.openFile(async () => undefined)
+    expect(api.openFile).toHaveBeenLastCalledWith('/tmp/desktop-project')
+  })
+
   it('translates the preload API into the shared workspace contract', async () => {
     const api = createApi()
     const port = createElectronWorkspacePort(api)

@@ -31,6 +31,22 @@ export type LocalServerDirectory = {
   }>
 }
 
+export type LocalServerStyleFolder = {
+  id: string
+  path: string
+  name: string
+}
+
+export type LocalServerStyleFile = {
+  name: string
+  contents: string
+}
+
+export type LocalServerStyleSnapshot = {
+  folder: LocalServerStyleFolder
+  files: LocalServerStyleFile[]
+}
+
 const readJson = async <Result>(response: Response): Promise<Result> => {
   const type = response.headers.get('content-type') ?? ''
   if (!type.includes('application/json')) {
@@ -73,11 +89,20 @@ export const getLocalServerCapabilities = async () => {
 export const openLocalServerWorkspace = (path: string) =>
   post<LocalServerSnapshot>('open', { path })
 
+export const openLocalServerStyleFolder = (path: string) =>
+  post<LocalServerStyleSnapshot>('open-style-folder', { path })
+
 export const browseLocalServerDirectory = (path: string) =>
   post<LocalServerDirectory>('browse', { path })
 
 export const reloadLocalServerWorkspace = (workspaceId: string) =>
   post<LocalServerSnapshot>('reload', { workspaceId })
+
+export const reloadLocalServerStyleFolder = (folderId: string) =>
+  post<LocalServerStyleSnapshot>('reload-style-folder', { folderId })
+
+export const readLocalServerStyleFile = (folderId: string, name: string) =>
+  post<{ contents: string }>('read-style-file', { folderId, name })
 
 export const getLocalServerAssetUrl = (workspaceId: string, name: string) =>
   `${API_ROOT}/asset?workspaceId=${encodeURIComponent(workspaceId)}&name=${encodeURIComponent(name)}`

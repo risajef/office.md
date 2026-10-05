@@ -1,8 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { stat } from 'node:fs/promises'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
+import { isEditableDocumentFile } from '../src/editable-files'
 import {
   ELECTRON_UPDATE_CHANNELS,
+  ELECTRON_STYLE_FOLDER_CHANNELS,
   ELECTRON_WORKSPACE_CHANNELS,
 } from '../src/electron-api'
 import {
@@ -17,10 +20,17 @@ import {
 } from './workspace-service'
 import { createElectronUpdateService } from './update-service'
 import { createElectronUpdaterProvider } from './updater-provider'
+import { createStyleFolderPreferenceStore, type StyleFolderPreferenceStore } from './style-folder-preferences'
+import {
+  createElectronStyleFolderService,
+  type ElectronStyleFolderRequest,
+} from './style-folder-service'
 
 const service = createElectronWorkspaceService()
+const styleFolderService = createElectronStyleFolderService()
 let mainWindow: BrowserWindow | undefined
 let lastWorkspacePath: string | undefined
+let styleFolderPreferences: StyleFolderPreferenceStore | undefined
 
 const updatePlatform: UpdatePlatform = process.platform === 'win32' ? 'win32' : 'linux'
 const updateArchitecture: UpdateArchitecture = 'x64'
@@ -59,15 +69,74 @@ const recordPayload = (payload: unknown) => {
 }
 
 const registerWorkspaceHandlers = () => {
-  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.open, async () => {
+  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.open, async (_event, startLocation: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
-    const selection = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    const selectedPath = selection.filePaths[0]
-    if (selection.canceled || !selectedPath) return undefined
+    const testWorkspacePath = process.env.OFFICE_MD_TEST_WORKSPACE
+    let selectedPath = testWorkspacePath
+    if (!selectedPath) {
+      const requestedLocation = typeof startLocation === 'string'
+        ? startLocation
+        : lastWorkspacePath
+      let defaultPath = app.getPath('documents')
+      if (requestedLocation) {
+        try {
+          if ((await stat(requestedLocation)).isDirectory()) defaultPath = requestedLocation
+        } catch {
+          // A removed or inaccessible previous location falls back to Documents.
+        }
+      }
+      const selection = await dialog.showOpenDialog(mainWindow, {
+        defaultPath,
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      selectedPath = selection.filePaths[0]
+      if (selection.canceled || !selectedPath) return undefined
+    }
     lastWorkspacePath = selectedPath
     return service.open(selectedPath)
+  })
+
+  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.openFile, async (_event, startLocation: unknown) => {
+    if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const testFilePath = process.env.OFFICE_MD_TEST_FILE
+    let selectedFile: string | undefined
+    if (testFilePath) {
+      selectedFile = testFilePath
+    } else {
+      const requestedLocation = typeof startLocation === 'string'
+        ? startLocation
+        : lastWorkspacePath
+      let defaultPath = app.getPath('documents')
+      if (requestedLocation) {
+        try {
+          if ((await stat(requestedLocation)).isDirectory()) defaultPath = requestedLocation
+        } catch {
+          // A removed or inaccessible previous location falls back to Documents.
+        }
+      }
+      const selection = await dialog.showOpenDialog(mainWindow, {
+        defaultPath,
+        properties: ['openFile'],
+        filters: [{
+          name: 'Markdown and CSV files',
+          extensions: ['md', 'markdown', 'csv'],
+        }],
+      })
+      selectedFile = selection.filePaths[0]
+      if (selection.canceled || !selectedFile) return undefined
+    }
+
+    const fileName = path.basename(selectedFile)
+    if (!isEditableDocumentFile(fileName)) {
+      throw new Error('Only Markdown and CSV files can be opened as documents.')
+    }
+    const parentPath = path.dirname(selectedFile)
+    const snapshot = await service.open(parentPath)
+    if (!snapshot.files.some((file) => file.name === fileName)) {
+      throw new Error('The selected file is not available in its parent folder.')
+    }
+    lastWorkspacePath = parentPath
+    return { snapshot, fileName }
   })
 
   ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.restore, async () => {
@@ -98,6 +167,63 @@ const registerWorkspaceHandlers = () => {
         ...fields,
         operation,
       } as ElectronWorkspaceRequest)
+    })
+  }
+}
+
+const registerStyleFolderHandlers = () => {
+  if (!styleFolderPreferences) {
+    styleFolderPreferences = createStyleFolderPreferenceStore(
+      path.join(app.getPath('userData'), 'style-folder.json'),
+    )
+  }
+
+  ipcMain.handle(ELECTRON_STYLE_FOLDER_CHANNELS.open, async () => {
+    const testFolderPath = process.env.OFFICE_MD_TEST_STYLE_FOLDER
+    if (testFolderPath) {
+      const snapshot = await styleFolderService.open(testFolderPath)
+      await styleFolderPreferences?.remember(snapshot.folder.path)
+      return snapshot
+    }
+    if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const selection = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    const selectedPath = selection.filePaths[0]
+    if (selection.canceled || !selectedPath) return undefined
+    const snapshot = await styleFolderService.open(selectedPath)
+    try {
+      await styleFolderPreferences?.remember(snapshot.folder.path)
+    } catch (error) {
+      console.warn('Could not remember the selected style folder.', error)
+    }
+    return snapshot
+  })
+
+  ipcMain.handle(ELECTRON_STYLE_FOLDER_CHANNELS.restore, async () => {
+    const rememberedPath = await styleFolderPreferences?.load()
+    if (!rememberedPath) return undefined
+    try {
+      const snapshot = await styleFolderService.restore(rememberedPath)
+      if (snapshot) return snapshot
+    } catch {
+      // The folder may have moved or become inaccessible between launches.
+    }
+    await styleFolderPreferences?.clear().catch(() => undefined)
+    return undefined
+  })
+
+  const operations = [
+    ['reload', ELECTRON_STYLE_FOLDER_CHANNELS.reload],
+    ['readFile', ELECTRON_STYLE_FOLDER_CHANNELS.readFile],
+  ] as const
+  for (const [operation, channel] of operations) {
+    ipcMain.handle(channel, (_event, payload: unknown) => {
+      const fields = recordPayload(payload)
+      return styleFolderService.dispatch({
+        ...fields,
+        operation,
+      } as ElectronStyleFolderRequest)
     })
   }
 }
@@ -141,6 +267,7 @@ void app.whenReady().then(async () => {
     lastWorkspacePath = process.env.OFFICE_MD_TEST_WORKSPACE
   }
   registerWorkspaceHandlers()
+  registerStyleFolderHandlers()
   registerUpdateHandlers()
   await createWindow()
   void updateService.start()

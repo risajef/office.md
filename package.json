@@ -54,5 +54,8 @@
   },
   "allowScripts": {
     "electron@37.10.3": true
+  },
+  "overrides": {
+    "yauzl": "^3.3.1"
   }
 }

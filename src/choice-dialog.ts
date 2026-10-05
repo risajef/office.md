@@ -59,6 +59,12 @@ export const requestChoice = (
     button.addEventListener('click', () => finish(choice.value))
     list.append(button)
   }
+  if (!options.choices.length) {
+    const empty = document.createElement('p')
+    empty.className = 'choice-dialog-empty'
+    empty.textContent = 'No Markdown or CSV files were found in this folder.'
+    list.append(empty)
+  }
 
   cancel.addEventListener('click', () => finish())
   dialog.addEventListener('cancel', (event) => {

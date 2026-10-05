@@ -82,6 +82,8 @@ npm run test:e2e         # web workflows and the Electron launch smoke test
 
 Electron exposes only the workspace operations required by the port. The renderer has context isolation enabled and Node integration disabled; all workspace-relative paths are validated in the main process before disk access.
 
+The independent style-folder capability follows the same boundary. `src/style-folder-port.ts` and `src/style-folder-application.ts` define the host-neutral read-only theme source, while `src/web-style-folder-port.ts` and `src/electron-style-folder-port.ts` adapt the local bridge, browser folder access, and secure Electron IPC. Electron stores only the last successfully scanned style-folder path in user-data preferences; CSS content is inlined for document and print exports, and external resources or nested `@import` graphs are intentionally outside the text-only contract.
+
 ## Close a change
 
 Before archiving:

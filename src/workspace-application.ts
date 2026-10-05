@@ -8,6 +8,8 @@ import type {
   WorkspaceFileSnapshot,
   WorkspaceInfo,
   WorkspacePort,
+  WorkspaceFileChooser,
+  WorkspaceFileSelection,
   WorkspaceSnapshot,
 } from './workspace-port'
 
@@ -20,6 +22,7 @@ export type WorkspaceApplicationState = {
 export type WorkspaceApplication = {
   readonly state: WorkspaceApplicationState
   open: () => Promise<WorkspaceSnapshot | undefined>
+  openFile: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
   reload: () => Promise<WorkspaceSnapshot>
   readAssetUrl: (name: string) => Promise<string | undefined>
@@ -111,6 +114,14 @@ export const createWorkspaceApplication = (
     async open() {
       const snapshot = await port.open()
       return snapshot ? setSnapshot(snapshot) : undefined
+    },
+    async openFile(chooseFile) {
+      const selection = await port.openFile(chooseFile)
+      if (!selection) return undefined
+      return {
+        snapshot: setSnapshot(selection.snapshot),
+        fileName: selection.fileName,
+      }
     },
     async restore() {
       const snapshot = await port.restore()

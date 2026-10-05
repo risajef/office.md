@@ -60,6 +60,7 @@ import {
 } from './plugins/markdown-include-plugin'
 import { htmlContentPlugin } from './plugins/html-content-plugin'
 import {
+  isEditableDocumentFile,
   isEditableTextFile,
   isImageFile,
   isWorkspaceFile,
@@ -83,8 +84,19 @@ import {
 import { createIcon, hydrateIcons, setIcon } from './icons'
 import { createEditorRuntime } from './editor-runtime'
 import { createRuntimeWorkspacePort } from './runtime-workspace-port'
+import { createRuntimeStyleFolderPort } from './runtime-style-folder-port'
 import { mountElectronUpdateUi } from './electron-update-ui'
+import {
+  applyDocumentTheme,
+  type DocumentThemeSource,
+} from './document-theme'
 import type { WorkspaceSnapshot } from './workspace-port'
+import type { WorkspaceFileSnapshot } from './workspace-port'
+import { firstVisibleEditableWorkspaceFile } from './workspace-file-order'
+import type {
+  StyleFileSnapshot,
+  StyleFolderInfo,
+} from './style-folder-port'
 
 // The examples are the dev workspace default. New storage versions prevent a
 // previous hard-coded demo from masking those files on the first run.
@@ -236,6 +248,14 @@ const renameDocumentButton = document.querySelector<HTMLButtonElement>(
 )
 const outlineElement = document.querySelector<HTMLElement>('#document-outline')
 const workspaceLayout = document.querySelector<HTMLElement>('.workspace-layout')
+const startupChoice = document.querySelector<HTMLElement>('#startup-choice')
+const startupOpenFolderButton = document.querySelector<HTMLButtonElement>(
+  '#startup-open-folder',
+)
+const startupOpenFileButton = document.querySelector<HTMLButtonElement>(
+  '#startup-open-file',
+)
+const startupStatus = document.querySelector<HTMLElement>('#startup-status')
 const outlineToggle = document.querySelector<HTMLButtonElement>('#toggle-outline')
 const filesToggle = document.querySelector<HTMLButtonElement>('#toggle-files')
 const outlineResizer = document.querySelector<HTMLButtonElement>('#outline-resizer')
@@ -250,6 +270,9 @@ const newFileButton = document.querySelector<HTMLButtonElement>('#new-file')
 const newFolderButton = document.querySelector<HTMLButtonElement>('#new-folder')
 const openFolderButton = document.querySelector<HTMLButtonElement>('#open-folder')
 const folderStatus = document.querySelector<HTMLElement>('#folder-status')
+const openStyleFolderButton = document.querySelector<HTMLButtonElement>('#open-style-folder')
+const styleFolderStatus = document.querySelector<HTMLElement>('#style-folder-status')
+const styleThemeListElement = document.querySelector<HTMLUListElement>('#style-theme-list')
 const editorCard = document.querySelector<HTMLElement>('.editor-card')
 const csvEditorCard = document.querySelector<HTMLElement>('#csv-editor-card')
 const csvEditorName = document.querySelector<HTMLElement>('#csv-editor-name')
@@ -587,8 +610,18 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
 const workspaceFiles = readWorkspaceFiles()
 const workspaceDirectories: string[] = []
 const imageObjectUrls = new Map<string, string>()
-const editorRuntime = createEditorRuntime(createRuntimeWorkspacePort())
+const editorRuntime = createEditorRuntime(
+  createRuntimeWorkspacePort(),
+  createRuntimeStyleFolderPort(),
+)
 const workspaceApplication = editorRuntime.workspace
+const styleFolderApplication = editorRuntime.styleFolder
+const styleFolderFiles: StyleFileSnapshot[] = []
+let styleFolderInfo: StyleFolderInfo | undefined
+let styleFolderUnavailable = false
+let customThemeStyle: HTMLStyleElement | undefined
+let activeThemeSource: DocumentThemeSource | undefined
+let lastWorkspaceTheme: DocumentThemeSource | undefined
 
 const clearImageObjectUrls = () => {
   for (const url of imageObjectUrls.values()) URL.revokeObjectURL(url)
@@ -614,6 +647,9 @@ const runWorkspaceAction = async (action: () => Promise<unknown>) => {
   workspaceActionPending = true
   const controls = [
     openFolderButton,
+    startupOpenFolderButton,
+    startupOpenFileButton,
+    openStyleFolderButton,
     newFileButton,
     newFolderButton,
     ...document.querySelectorAll<HTMLButtonElement>('[data-project-action]'),
@@ -665,13 +701,10 @@ const replaceWorkspaceFiles = (
   evaluatedCsvSources.clear()
   workspaceFiles.splice(0, workspaceFiles.length, ...files)
   workspaceDirectories.splice(0, workspaceDirectories.length, ...directories)
-  const preferred = files.find((file) => file.name === preferredFileName)
-  const nextActive = preferred
-    ?? files.find((file) => file.name === 'feature-tour.md')
-    ?? files.find((file) => file.kind === 'markdown' && !file.name.includes('/'))
-    ?? files.find((file) => file.kind === 'markdown')
-    ?? files.find((file) => file.kind === 'csv')
-    ?? files[0]
+  const preferred = files.find((file) =>
+    file.name === preferredFileName && isEditableDocumentFile(file.name))
+  const firstVisibleName = firstVisibleEditableWorkspaceFile(files, directories)
+  const nextActive = preferred ?? files.find((file) => file.name === firstVisibleName)
   activeFileId = nextActive?.id ?? ''
   if (nextActive?.kind === 'markdown') lastMarkdownFileId = nextActive.id
   workspaceCacheUnavailable = false
@@ -803,8 +836,8 @@ const persistWorkspace = () => {
   }
 }
 
-const activeFile = () =>
-  workspaceFiles.find((file) => file.id === activeFileId) ?? workspaceFiles[0]
+const activeFile = () => workspaceFiles.find((file) => file.id === activeFileId)
+  ?? (workspaceApplication.state.workspace ? undefined : workspaceFiles[0])
 
 const updateDocumentNameControls = (file = activeFile()) => {
   const fallbackName = workspaceApplication.state.workspace
@@ -1169,6 +1202,84 @@ const configureImageDrop = (editor: EditorInstance) => {
     editorRoot.removeEventListener('drop', onDrop, true)
     clearDropState()
   }
+}
+
+const workspaceThemeSource = (file: WorkspaceFile): DocumentThemeSource | undefined =>
+  file.kind === 'css'
+    ? {
+        id: file.id,
+        name: file.name,
+        contents: file.markdown,
+        origin: 'workspace',
+      }
+    : undefined
+
+const styleFolderThemeSource = (file: StyleFileSnapshot): DocumentThemeSource => ({
+  id: file.id,
+  name: file.name,
+  contents: file.contents,
+  origin: 'style-folder',
+})
+
+const availableDocumentThemes = () => [
+  ...workspaceFiles
+    .map(workspaceThemeSource)
+    .filter((theme): theme is DocumentThemeSource => Boolean(theme)),
+  ...styleFolderFiles.map(styleFolderThemeSource),
+]
+
+const renderStyleChoices = () => {
+  if (!styleThemeListElement) return
+  styleThemeListElement.replaceChildren()
+  const themes = availableDocumentThemes()
+  if (!themes.length) {
+    const empty = document.createElement('li')
+    empty.className = 'style-theme-empty'
+    empty.textContent = 'No CSS themes available.'
+    styleThemeListElement.append(empty)
+    return
+  }
+
+  if (styleFolderInfo && !styleFolderFiles.length) {
+    const empty = document.createElement('li')
+    empty.className = 'style-theme-empty'
+    empty.textContent = 'No CSS themes found in the selected style folder.'
+    styleThemeListElement.append(empty)
+  }
+
+  themes.forEach((theme) => {
+    const item = document.createElement('li')
+    item.className = 'style-theme-row'
+    item.dataset.themeOrigin = theme.origin
+    item.dataset.themeId = theme.id
+    if (activeThemeSource?.id === theme.id) item.classList.add('is-active')
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'style-theme-select'
+    button.dataset.themeOrigin = theme.origin
+    button.dataset.themeId = theme.id
+    const sourceLabel = theme.origin === 'style-folder'
+      ? styleFolderInfo?.name ?? 'Style folder'
+      : 'Workspace'
+    button.title = `Apply ${theme.name} · ${sourceLabel}`
+    button.dataset.tooltip = button.title
+    button.setAttribute('aria-label', button.title)
+    button.setAttribute('aria-pressed', String(activeThemeSource?.id === theme.id))
+
+    const name = document.createElement('span')
+    name.className = 'style-theme-name'
+    name.textContent = theme.name
+    const source = document.createElement('span')
+    source.className = 'style-theme-source'
+    source.textContent = sourceLabel
+    button.append(name, source)
+    button.addEventListener('click', () => {
+      void applyThemeSource(theme)
+    })
+    item.append(button)
+    styleThemeListElement.append(item)
+  })
 }
 
 const renderFileList = (editor: EditorInstance) => {
@@ -1735,7 +1846,13 @@ const reloadProject = async (editor: EditorInstance) => {
     }
     const snapshot = await workspaceApplication.reload()
     await loadWorkspaceFromSnapshot(snapshot, { editor, preferredFileName })
-    setStatus(`Reloaded ${snapshot.workspace.name} from disk`, 'saved')
+    const styleAvailable = await reloadStyleFolder()
+    setStatus(
+      styleAvailable
+        ? `Reloaded ${snapshot.workspace.name} from disk`
+        : `Reloaded ${snapshot.workspace.name}; select the style folder again`,
+      styleAvailable ? 'saved' : 'ready',
+    )
     setCsvStatus(`Reloaded ${snapshot.workspace.name} from disk`)
     return true
   } catch (error) {
@@ -2327,8 +2444,20 @@ const migrateRenamedFileIdentity = (
     if (newId !== oldId) delete pageSettingsByFile[oldId]
     persistPageSettings()
   }
-  if (customThemeStyle?.dataset.workspaceTheme === oldId) {
-    customThemeStyle.dataset.workspaceTheme = newId
+  if (activeThemeSource?.origin === 'workspace' && activeThemeSource.id === oldId) {
+    activeThemeSource = {
+      ...activeThemeSource,
+      id: newId,
+      name: newName,
+    }
+    if (customThemeStyle) customThemeStyle.dataset.documentTheme = newId
+  }
+  if (lastWorkspaceTheme?.id === oldId) {
+    lastWorkspaceTheme = {
+      ...lastWorkspaceTheme,
+      id: newId,
+      name: newName,
+    }
   }
 }
 
@@ -2444,8 +2573,6 @@ const createNewFile = async (editor: EditorInstance) => {
   openFile(editor, file.id)
 }
 
-let customThemeStyle: HTMLStyleElement | undefined
-
 const requestWorkspaceDeletion = async (kind: 'file' | 'folder', name: string) => {
   const choice = await requestChoice({
     title: `Delete ${kind} ${name}?`,
@@ -2535,11 +2662,11 @@ const deleteWorkspaceFile = async (editor: EditorInstance, fileId: string) => {
     if (isDiskBackedFile(file)) await workspaceApplication.deleteFile(file.name)
 
     if (file.id === activeCsvFileId) destroyCsvEditor()
-    if (customThemeStyle?.dataset.workspaceTheme === file.id) {
-      customThemeStyle.remove()
-      customThemeStyle = undefined
-      editorRoot.closest<HTMLElement>('.editor-wrap')?.classList.remove('has-document-theme')
-      notifyMermaidThemeChanged()
+    if (lastWorkspaceTheme?.id === file.id) {
+      lastWorkspaceTheme = undefined
+    }
+    if (activeThemeSource?.origin === 'workspace' && activeThemeSource.id === file.id) {
+      clearDocumentTheme()
     }
     const index = workspaceFiles.findIndex((candidate) => candidate.id === file.id)
     if (index >= 0) workspaceFiles.splice(index, 1)
@@ -2582,100 +2709,83 @@ const deleteWorkspaceFile = async (editor: EditorInstance, fileId: string) => {
   }
 }
 
-const splitCssSelectors = (value: string) => {
-  const selectors: string[] = []
-  let start = 0
-  let depth = 0
-  let quote = ''
-  let escaped = false
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (character === '\\') {
-      escaped = true
-      continue
-    }
-    if (quote) {
-      if (character === quote) quote = ''
-      continue
-    }
-    if (character === '"' || character === "'") {
-      quote = character
-    } else if (character === '(' || character === '[') {
-      depth += 1
-    } else if (character === ')' || character === ']') {
-      depth = Math.max(0, depth - 1)
-    } else if (character === ',' && depth === 0) {
-      selectors.push(value.slice(start, index))
-      start = index + 1
-    }
+const updateStyleFolderStatus = () => {
+  if (!styleFolderStatus) return
+  if (styleFolderUnavailable) {
+    styleFolderStatus.textContent = 'Style folder unavailable · select again'
+    return
   }
-
-  selectors.push(value.slice(start))
-  return selectors
-}
-
-const scopeCssSelector = (selector: string) => {
-  const trimmed = selector.trim()
-  if (!trimmed) return trimmed
-  const scope = '.editor-wrap'
-  const scopedGlobals = trimmed.replace(
-    /(^|[\s>+~])(html|body|:root)(?=$|[\s>+~.#:[\]])/g,
-    '$1.editor-wrap',
-  ).replace(
-    /^\.editor-card(?=$|[\s>+~.#:[\]])/,
-    '.editor-wrap',
-  )
-  return scopedGlobals === scope || scopedGlobals.startsWith(`${scope} `)
-    ? scopedGlobals
-    : `${scope} ${scopedGlobals}`
-}
-
-const scopeDocumentCss = (style: HTMLStyleElement) => {
-  const rules = style.sheet?.cssRules
-  if (!rules) return
-
-  const visit = (list: CSSRuleList) => {
-    for (const rule of Array.from(list)) {
-      if (rule.type === 1) {
-        const styleRule = rule as CSSStyleRule
-        styleRule.selectorText = splitCssSelectors(styleRule.selectorText)
-          .map(scopeCssSelector)
-          .join(', ')
-        continue
-      }
-
-      // Keyframe selectors such as `from` and `to` must remain untouched.
-      if (rule.type === 7 || !('cssRules' in rule)) continue
-      try {
-        visit((rule as CSSGroupingRule).cssRules)
-      } catch {
-        // Some browser-managed rules (for example cross-origin imports) are not readable.
-      }
-    }
+  if (!styleFolderInfo) {
+    styleFolderStatus.textContent = 'No independent style folder selected'
+    return
   }
-
-  visit(rules)
+  styleFolderStatus.textContent = styleFolderFiles.length
+    ? `${styleFolderInfo.name} · ${styleFolderFiles.length} CSS themes`
+    : `${styleFolderInfo.name} · No CSS themes found`
+  styleFolderStatus.title = styleFolderInfo.path
 }
 
-const applyCssFile = (file: WorkspaceFile) => {
-  if (file.kind !== 'css') return
+const clearDocumentTheme = () => {
   customThemeStyle?.remove()
-  customThemeStyle = document.createElement('style')
-  customThemeStyle.dataset.workspaceTheme = file.id
-  customThemeStyle.textContent = file.markdown
-  document.head.append(customThemeStyle)
-  scopeDocumentCss(customThemeStyle)
+  customThemeStyle = undefined
+  activeThemeSource = undefined
+  editorRoot?.closest<HTMLElement>('.editor-wrap')?.classList.remove('has-document-theme')
+  notifyMermaidThemeChanged()
+  workspaceEditor?.action((ctx) => {
+    requestPageLayoutRefresh(ctx.get(editorViewCtx))
+  })
+  renderStyleChoices()
+}
+
+const clearStyleFolderState = (message = 'Style folder unavailable · select it again') => {
+  styleFolderApplication?.clear()
+  styleFolderFiles.splice(0, styleFolderFiles.length)
+  styleFolderInfo = undefined
+  styleFolderUnavailable = true
+  updateStyleFolderStatus()
+  renderStyleChoices()
+  if (activeThemeSource?.origin === 'style-folder') {
+    clearDocumentTheme()
+    if (lastWorkspaceTheme) void applyThemeSource(lastWorkspaceTheme)
+  }
+  setStatus(message, 'ready')
+}
+
+const applyThemeSource = async (source: DocumentThemeSource) => {
+  let contents = source.contents
+  if (source.origin === 'style-folder') {
+    const file = styleFolderFiles.find((candidate) => candidate.id === source.id)
+    if (!file || !styleFolderApplication) {
+      clearStyleFolderState()
+      return false
+    }
+    try {
+      contents = await styleFolderApplication.readFile(file.name)
+    } catch (error) {
+      console.warn('Could not read the selected external style.', error)
+      clearStyleFolderState()
+      return false
+    }
+  }
+
+  const appliedSource = { ...source, contents }
+  customThemeStyle?.remove()
+  customThemeStyle = applyDocumentTheme(document, appliedSource)
+  activeThemeSource = appliedSource
+  if (source.origin === 'workspace') lastWorkspaceTheme = appliedSource
   editorRoot?.closest<HTMLElement>('.editor-wrap')?.classList.add('has-document-theme')
   notifyMermaidThemeChanged()
   workspaceEditor?.action((ctx) => {
     requestPageLayoutRefresh(ctx.get(editorViewCtx))
   })
-  setStatus(`Applied ${file.name}`, 'saved')
+  renderStyleChoices()
+  setStatus(`Applied ${source.name}`, 'saved')
+  return true
+}
+
+const applyCssFile = (file: WorkspaceFile) => {
+  const source = workspaceThemeSource(file)
+  if (source) void applyThemeSource(source)
 }
 
 const activateWorkspaceFile = (editor: EditorInstance) => {
@@ -2716,45 +2826,128 @@ const loadWorkspaceFromSnapshot = async (
   }
 
   if (options.editor) activateWorkspaceFile(options.editor)
-  const activeTheme = customThemeStyle?.dataset.workspaceTheme
-  if (activeTheme) {
-    const themeFile = workspaceFiles.find((file) => file.id === activeTheme)
-    if (themeFile?.kind === 'css') applyCssFile(themeFile)
+  if (lastWorkspaceTheme) {
+    const refreshedTheme = workspaceFiles.find((file) => file.id === lastWorkspaceTheme?.id)
+    if (refreshedTheme?.kind === 'css') {
+      lastWorkspaceTheme = workspaceThemeSource(refreshedTheme)
+    } else {
+      lastWorkspaceTheme = undefined
+    }
   }
+  if (activeThemeSource?.origin === 'workspace') {
+    const themeFile = workspaceFiles.find((file) => file.id === activeThemeSource?.id)
+    if (themeFile?.kind === 'css') applyCssFile(themeFile)
+    else {
+      lastWorkspaceTheme = undefined
+      clearDocumentTheme()
+    }
+  }
+  renderStyleChoices()
+  updateStyleFolderStatus()
   await refreshEvaluatedCsvSources()
   notifyMarkdownIncludesChanged()
   notifyMermaidCsvDataChanged()
   return snapshot.files.length
 }
 
-const restoreFolderWorkspace = async () => {
+const loadStyleFolderFromSnapshot = async (snapshot: {
+  folder: StyleFolderInfo
+  files: StyleFileSnapshot[]
+}) => {
+  styleFolderInfo = { ...snapshot.folder }
+  styleFolderFiles.splice(
+    0,
+    styleFolderFiles.length,
+    ...snapshot.files.map((file) => ({ ...file })),
+  )
+  styleFolderUnavailable = false
+  updateStyleFolderStatus()
+  renderStyleChoices()
+
+  if (activeThemeSource?.origin === 'style-folder') {
+    const activeFile = styleFolderFiles.find((file) => file.id === activeThemeSource?.id)
+    if (activeFile) {
+      await applyThemeSource(styleFolderThemeSource(activeFile))
+    } else {
+      clearDocumentTheme()
+      if (lastWorkspaceTheme) await applyThemeSource(lastWorkspaceTheme)
+    }
+  }
+  return styleFolderFiles.length
+}
+
+const openStyleFolder = async () => {
+  if (!styleFolderApplication) return false
   try {
-    const snapshot = await workspaceApplication.restore()
+    setStatus('Selecting style folder…', 'saving')
+    const snapshot = await styleFolderApplication.open()
     if (!snapshot) {
-      if (folderStatus && workspaceFiles.some((file) => file.source === 'disk')) {
-        folderStatus.textContent = 'Cached files only · open the folder to reconnect'
-      }
+      setStatus('Style-folder selection cancelled', 'ready')
+      updateStyleFolderStatus()
       return false
     }
-    await loadWorkspaceFromSnapshot(snapshot, {
-      preferredFileName: activeFile()?.name,
-    })
+    await loadStyleFolderFromSnapshot(snapshot)
+    setStatus(
+      styleFolderFiles.length
+        ? `Loaded ${styleFolderInfo?.name ?? 'style folder'}`
+        : `Loaded empty style folder ${styleFolderInfo?.name ?? ''}`.trim(),
+      'saved',
+    )
     return true
   } catch (error) {
-    console.warn('Could not restore the previous folder.', error)
-    if (folderStatus) folderStatus.textContent = 'Open a folder to edit files on disk'
+    console.error('Could not open the style folder.', error)
+    const message = error instanceof Error
+      ? error.message
+      : 'Style-folder access failed. Select the folder again.'
+    setStatus(message, 'ready')
+    updateStyleFolderStatus()
+    return false
+  }
+}
+
+// Bind this independent action before the asynchronous editor initialization
+// finishes so the folder control is usable as soon as it is visible.
+openStyleFolderButton?.addEventListener('click', () => {
+  void runWorkspaceAction(openStyleFolder)
+})
+
+const restoreStyleFolder = async () => {
+  if (!styleFolderApplication) return false
+  try {
+    const snapshot = await styleFolderApplication.restore()
+    if (!snapshot) {
+      updateStyleFolderStatus()
+      return false
+    }
+    await loadStyleFolderFromSnapshot(snapshot)
+    return true
+  } catch (error) {
+    console.warn('Could not restore the previous style folder.', error)
+    clearStyleFolderState('Style folder unavailable · select it again')
+    return false
+  }
+}
+
+const reloadStyleFolder = async () => {
+  if (!styleFolderApplication || !styleFolderInfo) return true
+  try {
+    await loadStyleFolderFromSnapshot(await styleFolderApplication.reload())
+    return true
+  } catch (error) {
+    console.warn('Could not reload the style folder.', error)
+    clearStyleFolderState('Style folder unavailable · select it again')
     return false
   }
 }
 
 const openLocalFolder = async (editor: EditorInstance) => {
-  const preferredFileName = activeFile()?.name
   try {
     setStatus('Opening folder…', 'saving')
     if (folderStatus) folderStatus.textContent = 'Choose a folder…'
     const snapshot = await workspaceApplication.open()
     if (!snapshot) {
       setStatus('Folder selection cancelled', 'ready')
+      if (startupStatus) startupStatus.textContent = ''
       if (folderStatus) {
         folderStatus.textContent = workspaceApplication.state.workspace
           ? `${workspaceApplication.state.workspace.name} · disk-backed`
@@ -2763,21 +2956,57 @@ const openLocalFolder = async (editor: EditorInstance) => {
       return
     }
 
-    await loadWorkspaceFromSnapshot(snapshot, {
-      editor,
-      preferredFileName,
-    })
+    await loadWorkspaceFromSnapshot(snapshot, { editor })
+    if (startupChoice) startupChoice.hidden = true
+    if (workspaceLayout) workspaceLayout.hidden = false
+    if (startupStatus) startupStatus.textContent = ''
     setStatus(`Opened ${snapshot.workspace.name} from disk`, 'saved')
   } catch (error) {
     console.error('Could not open local folder.', error)
     const message = error instanceof Error ? error.message : 'Folder access failed.'
     setStatus(message, 'ready')
+    if (startupStatus) startupStatus.textContent = message
+    if (folderStatus) folderStatus.textContent = message
+  }
+}
+
+const chooseEditableWorkspaceFile = (files: WorkspaceFileSnapshot[]) => requestChoice({
+  title: 'Open file',
+  label: 'Choose a Markdown or CSV file.',
+  choices: files
+    .filter((file) => isEditableDocumentFile(file.name))
+    .map((file) => ({ value: file.name, label: file.name })),
+})
+
+const openLocalFile = async (editor: EditorInstance) => {
+  try {
+    setStatus('Choosing a file…', 'saving')
+    const selection = await workspaceApplication.openFile(chooseEditableWorkspaceFile)
+    if (!selection) {
+      setStatus('File selection cancelled', 'ready')
+      if (startupStatus) startupStatus.textContent = ''
+      return
+    }
+
+    await loadWorkspaceFromSnapshot(selection.snapshot, {
+      editor,
+      preferredFileName: selection.fileName,
+    })
+    if (startupChoice) startupChoice.hidden = true
+    if (workspaceLayout) workspaceLayout.hidden = false
+    if (startupStatus) startupStatus.textContent = ''
+    setStatus(`Opened ${selection.fileName} from disk`, 'saved')
+  } catch (error) {
+    console.error('Could not open local file.', error)
+    const message = error instanceof Error ? error.message : 'File access failed.'
+    setStatus(message, 'ready')
+    if (startupStatus) startupStatus.textContent = message
     if (folderStatus) folderStatus.textContent = message
   }
 }
 
 const startEditor = async () => {
-  await restoreFolderWorkspace()
+  await restoreStyleFolder()
   const current = activeFile()
   const currentMarkdownFile =
     current?.kind === 'markdown'
@@ -2910,6 +3139,8 @@ const startEditor = async () => {
   persistWorkspace()
   updateDocumentNameControls(currentMarkdownFile)
   renderFileList(editor)
+  renderStyleChoices()
+  updateStyleFolderStatus()
   renderPageFormatOptions()
   setDebugMarkdown(getMarkdown(editor))
   scheduleOutlineUpdate(editor)
@@ -3035,6 +3266,14 @@ const startEditor = async () => {
 
   openFolderButton?.addEventListener('click', () => {
     void runWorkspaceAction(() => openLocalFolder(editor))
+  })
+
+  startupOpenFolderButton?.addEventListener('click', () => {
+    void runWorkspaceAction(() => openLocalFolder(editor))
+  })
+
+  startupOpenFileButton?.addEventListener('click', () => {
+    void runWorkspaceAction(() => openLocalFile(editor))
   })
 
   const renameActiveFile = () => {

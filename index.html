@@ -48,7 +48,19 @@
             </button>
           </div>
         </section>
-        <div class="workspace-layout" id="workspace-layout">
+        <section class="startup-choice" id="startup-choice" aria-labelledby="startup-title">
+          <div class="startup-choice-card">
+            <p class="startup-choice-eyebrow">office.md</p>
+            <h1 id="startup-title">Where would you like to work?</h1>
+            <p class="startup-choice-copy">Choose a folder to work across its files, or open a Markdown or CSV file directly.</p>
+            <div class="startup-choice-actions">
+              <button class="startup-choice-primary" id="startup-open-folder" type="button">Open folder</button>
+              <button class="startup-choice-secondary" id="startup-open-file" type="button">Open file</button>
+            </div>
+            <p class="startup-choice-status" id="startup-status" aria-live="polite"></p>
+          </div>
+        </section>
+        <div class="workspace-layout" id="workspace-layout" hidden>
           <aside class="outline-sidebar" id="outline-sidebar" aria-label="Document outline">
             <section class="sidebar-section outline-section">
               <div class="sidebar-heading">
@@ -331,6 +343,21 @@
               </div>
               <p class="folder-status" id="folder-status">Browser-local files</p>
               <ul class="file-list" id="file-list"></ul>
+            </section>
+
+            <section class="sidebar-section styles-section" aria-label="Document styles">
+              <div class="sidebar-heading">
+                <h2>Styles</h2>
+              </div>
+              <div class="folder-actions">
+                <button class="folder-button" id="open-style-folder" type="button">
+                  Select style folder
+                </button>
+              </div>
+              <p class="folder-status style-folder-status" id="style-folder-status">
+                No independent style folder selected
+              </p>
+              <ul class="style-theme-list" id="style-theme-list" aria-label="Document themes"></ul>
             </section>
 
           </aside>

@@ -18,6 +18,7 @@ const IMAGE_EXTENSIONS = new Set([
   '.tiff',
   '.webp',
 ])
+const EDITABLE_DOCUMENT_EXTENSIONS = new Set(['.md', '.markdown', '.csv'])
 
 const hasVisiblePath = (name: string) => {
   const parts = name.replaceAll('\\', '/').split('/')
@@ -33,6 +34,9 @@ export const isEditableTextFile = (name: string) => {
   return hasVisiblePath(name) &&
     WORKSPACE_EXTENSIONS.has(extensionOf(name))
 }
+
+export const isEditableDocumentFile = (name: string) =>
+  hasVisiblePath(name) && EDITABLE_DOCUMENT_EXTENSIONS.has(extensionOf(name))
 
 export const isImageFile = (name: string) =>
   hasVisiblePath(name) && IMAGE_EXTENSIONS.has(extensionOf(name))

@@ -6,6 +6,9 @@ import {
   deleteLocalServerFile,
   getLocalServerCapabilities,
   openLocalServerWorkspace,
+  openLocalServerStyleFolder,
+  readLocalServerStyleFile,
+  reloadLocalServerStyleFolder,
   reloadLocalServerWorkspace,
   renameLocalServerFile,
   writeLocalServerFile,
@@ -28,6 +31,9 @@ describe('local server filesystem client', () => {
     await renameLocalServerFile('workspace', 'notes.md', 'renamed.md')
     await reloadLocalServerWorkspace('workspace')
     await openLocalServerWorkspace('/tmp/project')
+    await openLocalServerStyleFolder('/tmp/styles')
+    await reloadLocalServerStyleFolder('style-folder')
+    await readLocalServerStyleFile('style-folder', 'theme.css')
     await browseLocalServerDirectory('/tmp')
     await createLocalServerDirectory('workspace', 'new-folder')
     await deleteLocalServerFile('workspace', 'notes.md')
@@ -38,6 +44,9 @@ describe('local server filesystem client', () => {
       '/__office_md_fs/rename',
       '/__office_md_fs/reload',
       '/__office_md_fs/open',
+      '/__office_md_fs/open-style-folder',
+      '/__office_md_fs/reload-style-folder',
+      '/__office_md_fs/read-style-file',
       '/__office_md_fs/browse',
       '/__office_md_fs/mkdir',
       '/__office_md_fs/delete-file',
@@ -53,9 +62,15 @@ describe('local server filesystem client', () => {
       oldName: 'notes.md',
       newName: 'renamed.md',
     })
+    expect(JSON.parse(String(fetchMock.mock.calls[4][1]?.body))).toEqual({
+      path: '/tmp/styles',
+    })
     expect(JSON.parse(String(fetchMock.mock.calls[5][1]?.body))).toEqual({
-      workspaceId: 'workspace',
-      name: 'new-folder',
+      folderId: 'style-folder',
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[6][1]?.body))).toEqual({
+      folderId: 'style-folder',
+      name: 'theme.css',
     })
   })
 

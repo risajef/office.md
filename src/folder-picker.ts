@@ -21,6 +21,10 @@ const createButton = (
 
 export const pickLocalServerFolder = (
   initialPath: string,
+  options: {
+    title?: string
+    openLabel?: string
+  } = {},
 ): Promise<string | undefined> => new Promise((resolve) => {
   const dialog = document.createElement('dialog')
   dialog.className = 'folder-picker-dialog'
@@ -30,7 +34,7 @@ export const pickLocalServerFolder = (
   header.className = 'folder-picker-header'
   const heading = document.createElement('h2')
   heading.id = 'folder-picker-title'
-  heading.textContent = 'Open folder'
+  heading.textContent = options.title ?? 'Open folder'
   const closeButton = createButton('', 'folder-picker-close', 'Cancel', 'close')
   header.append(heading, closeButton)
 
@@ -58,7 +62,10 @@ export const pickLocalServerFolder = (
   const footer = document.createElement('div')
   footer.className = 'folder-picker-footer'
   const cancelButton = createButton('Cancel', 'dialog-secondary')
-  const openButton = createButton('Open this folder', 'dialog-primary')
+  const openButton = createButton(
+    options.openLabel ?? 'Open this folder',
+    'dialog-primary',
+  )
   openButton.disabled = true
   footer.append(message, cancelButton, openButton)
 

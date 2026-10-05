@@ -1,15 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  ElectronStyleFolderApi,
   ElectronUpdateApi,
   ElectronWorkspaceApi,
 } from '../src/electron-api'
 import type { UpdateState } from '../src/electron-update'
-import type { WorkspaceSnapshot } from '../src/workspace-port'
+import type { StyleFolderSnapshot } from '../src/style-folder-port'
+import type { WorkspaceFileSelection, WorkspaceSnapshot } from '../src/workspace-port'
 
 // Keep the sandboxed preload self-contained: it may require Electron's
 // built-in modules, but it must not load arbitrary application modules.
 const channels = {
   open: 'workspace:open',
+  openFile: 'workspace:open-file',
   restore: 'workspace:restore',
   reload: 'workspace:reload',
   readFile: 'workspace:read-file',
@@ -19,6 +22,13 @@ const channels = {
   createDirectory: 'workspace:create-directory',
   deleteFile: 'workspace:delete-file',
   deleteDirectory: 'workspace:delete-directory',
+} as const
+
+const styleFolderChannels = {
+  open: 'style-folder:open',
+  restore: 'style-folder:restore',
+  reload: 'style-folder:reload',
+  readFile: 'style-folder:read-file',
 } as const
 
 const updateChannels = {
@@ -34,7 +44,14 @@ const invoke = <Result>(channel: string, payload?: unknown) =>
   ipcRenderer.invoke(channel, payload) as Promise<Result>
 
 const workspace: ElectronWorkspaceApi = {
-  open: () => invoke<WorkspaceSnapshot | undefined>(channels.open),
+  open: (startingLocation) => invoke<WorkspaceSnapshot | undefined>(
+    channels.open,
+    startingLocation,
+  ),
+  openFile: (startingLocation) => invoke<WorkspaceFileSelection | undefined>(
+    channels.openFile,
+    startingLocation,
+  ),
   restore: () => invoke<WorkspaceSnapshot | undefined>(channels.restore),
   reload: (workspaceId) => invoke<WorkspaceSnapshot>(
     channels.reload,
@@ -73,6 +90,19 @@ const workspace: ElectronWorkspaceApi = {
   ),
 }
 
+const styleFolder: ElectronStyleFolderApi = {
+  open: () => invoke<StyleFolderSnapshot | undefined>(styleFolderChannels.open),
+  restore: () => invoke<StyleFolderSnapshot | undefined>(styleFolderChannels.restore),
+  reload: (folderId) => invoke<StyleFolderSnapshot>(
+    styleFolderChannels.reload,
+    { folderId },
+  ),
+  readFile: (folderId, name) => invoke<string>(
+    styleFolderChannels.readFile,
+    { folderId, name },
+  ),
+}
+
 const isUpdateState = (value: unknown): value is UpdateState =>
   Boolean(value && typeof value === 'object' && 'status' in value)
 
@@ -91,4 +121,4 @@ const updates: ElectronUpdateApi = {
   },
 }
 
-contextBridge.exposeInMainWorld('officeMd', { workspace, updates })
+contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder, updates })

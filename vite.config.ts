@@ -10,6 +10,7 @@ import {
   isWorkspaceFile,
   shouldSkipDirectory,
 } from './src/editable-files'
+import { normalizeStyleFilePath } from './src/style-folder-port'
 
 const API_ROOT = '/__office_md_fs'
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -125,6 +126,21 @@ const resolveWorkspaceTarget = (root: string, name: string) => {
   return target
 }
 
+const resolveStyleTarget = async (root: string, name: string) => {
+  const target = resolveWorkspaceTarget(root, normalizeStyleFilePath(name))
+  const resolved = await fs.realpath(target)
+  const relative = path.relative(root, resolved)
+  if (
+    !relative ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('The style file path must stay inside the selected folder.')
+  }
+  return resolved
+}
+
 const readWorkspaceDirectories = async (root: string, relative = ''): Promise<string[]> => {
   const directory = path.join(root, relative)
   const directories: string[] = []
@@ -137,6 +153,30 @@ const readWorkspaceDirectories = async (root: string, relative = ''): Promise<st
   return directories.sort((left, right) => left.localeCompare(right))
 }
 
+const readStyleFiles = async (root: string, relative = ''): Promise<Array<{
+  name: string
+  contents: string
+}>> => {
+  const directory = path.join(root, relative)
+  const files: Array<{ name: string; contents: string }> = []
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const name = relative ? `${relative}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      if (!shouldSkipDirectory(entry.name)) {
+        files.push(...await readStyleFiles(root, name))
+      }
+      continue
+    }
+    if (!entry.isFile() || entry.name.startsWith('.') ||
+      !entry.name.toLowerCase().endsWith('.css')) continue
+    files.push({
+      name,
+      contents: await fs.readFile(path.join(root, name), 'utf8'),
+    })
+  }
+  return files.sort((left, right) => left.name.localeCompare(right.name))
+}
+
 const installFilesystemMiddleware = (
   middleware: { use: (handler: (
     request: IncomingMessage,
@@ -145,6 +185,7 @@ const installFilesystemMiddleware = (
   ) => void) => void },
 ) => {
   const workspaces = new Map<string, string>()
+  const styleFolders = new Map<string, string>()
 
   middleware.use((request, response, next) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
@@ -225,6 +266,63 @@ const installFilesystemMiddleware = (
           files: await readWorkspaceFiles(root),
           directories: await readWorkspaceDirectories(root),
         })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/open-style-folder`) {
+        if (typeof body.path !== 'string' || !body.path.trim()) {
+          throw new Error('Enter a style folder path.')
+        }
+        const requestedPath = path.resolve(localPathFromInput(body.path))
+        const root = await fs.realpath(requestedPath)
+        const stats = await fs.stat(root)
+        if (!stats.isDirectory()) throw new Error('The selected path is not a folder.')
+        const folder = {
+          id: randomUUID(),
+          path: root,
+          name: path.basename(root) || root,
+        }
+        const files = await readStyleFiles(root)
+        styleFolders.set(folder.id, root)
+        sendJson(response, 200, {
+          folder,
+          files,
+        })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/reload-style-folder`) {
+        if (typeof body.folderId !== 'string') {
+          throw new Error('The style-folder session is missing.')
+        }
+        const root = styleFolders.get(body.folderId)
+        if (!root) throw new Error('The style-folder session expired. Select it again.')
+        const stats = await fs.stat(root)
+        if (!stats.isDirectory()) throw new Error('The selected style folder is not a folder.')
+        sendJson(response, 200, {
+          folder: {
+            id: body.folderId,
+            path: root,
+            name: path.basename(root) || root,
+          },
+          files: await readStyleFiles(root),
+        })
+        return
+      }
+
+      if (url.pathname === `${API_ROOT}/read-style-file`) {
+        if (typeof body.folderId !== 'string' || typeof body.name !== 'string') {
+          throw new Error('The style-file request is invalid.')
+        }
+        const root = styleFolders.get(body.folderId)
+        if (!root) throw new Error('The style-folder session expired. Select it again.')
+        if (!body.name.toLowerCase().endsWith('.css')) {
+          throw new Error('The style file name is invalid.')
+        }
+        const target = await resolveStyleTarget(root, body.name)
+        const stats = await fs.stat(target)
+        if (!stats.isFile()) throw new Error('Only CSS files can be read.')
+        sendJson(response, 200, { contents: await fs.readFile(target, 'utf8') })
         return
       }
 

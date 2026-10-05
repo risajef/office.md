@@ -45,6 +45,36 @@ describe('WorkspaceApplication', () => {
       .toBe(changedCsv)
   })
 
+  it('filters Open File to Markdown and CSV and opens a nested file from its parent workspace', async () => {
+    const application = createWorkspaceApplication(createMemoryWorkspacePort({
+      path: '/tmp/office-md-project',
+      name: 'office-md-project',
+      files: [
+        { name: 'document.md', markdown: '# Root\n' },
+        { name: 'nested/table.csv', markdown: 'name,value\nAlpha,1\n' },
+        { name: 'nested/theme.css', markdown: 'body {}' },
+        { name: 'notes.txt', markdown: 'unsupported' },
+      ],
+    }))
+
+    const selection = await application.openFile(async (files) => {
+      expect(files.map((file) => file.name)).toEqual([
+        'document.md',
+        'nested/table.csv',
+      ])
+      return 'nested/table.csv'
+    })
+
+    expect(selection?.fileName).toBe('table.csv')
+    expect(selection?.snapshot.workspace).toMatchObject({
+      name: 'nested',
+      path: '/tmp/office-md-project/nested',
+    })
+    expect(application.state.workspace?.path).toBe('/tmp/office-md-project/nested')
+    expect(application.file('table.csv')?.markdown).toContain('Alpha,1')
+    expect(application.file('theme.css')?.markdown).toBe('body {}')
+  })
+
   it('resolves includes and creates an export through the public application seam', async () => {
     const application = createApplication()
     await application.open()

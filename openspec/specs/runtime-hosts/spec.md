@@ -39,6 +39,20 @@ The system SHALL apply the same Markdown, CSV, include, rendering, export, and w
 - **WHEN** the user attempts an unsafe path, overwrite, or non-empty-directory deletion in either target
 - **THEN** the operation is rejected under the same workspace safety rules and existing content remains unchanged
 
+### Requirement: Preserve startup workspace selection across runtime targets
+
+The system SHALL provide the folder-or-file startup choice in every supported web and Electron runtime. Each runtime SHALL let the user open a Markdown or CSV file with its immediate parent folder as the workspace and the selected file active, while preserving the same resulting workspace and active-file behavior.
+
+#### Scenario: A file is opened in a supported runtime
+
+- **WHEN** the user selects a supported Markdown or CSV file in a supported web or Electron runtime
+- **THEN** that runtime opens the parent workspace and activates the selected file
+
+#### Scenario: A folder is opened in a supported runtime
+
+- **WHEN** the user opens the same folder through a supported web or Electron runtime
+- **THEN** the first editable Markdown or CSV file in the workspace file view's visible order becomes active, or no document is active if the folder contains none
+
 ### Requirement: Keep workspace files as the cross-host source of truth
 
 The system SHALL persist supported document changes to the opened workspace files and SHALL not require a host-specific product database to transfer the current document state between supported targets.

@@ -1,10 +1,13 @@
 import {
   createBackendWorkspacePort,
+  type WorkspaceFileChooser,
+  type WorkspaceFileSelection,
   type WorkspaceFileSnapshot,
   type WorkspaceBackend,
   type WorkspacePort,
   type WorkspaceSnapshot,
 } from './workspace-port'
+import { isEditableDocumentFile } from './editable-files'
 import {
   createLocalDirectory,
   deleteLocalDirectory,
@@ -25,6 +28,7 @@ import {
   createLocalServerDirectory,
   deleteLocalServerDirectory,
   deleteLocalServerFile,
+  browseLocalServerDirectory,
   getLocalServerAssetUrl,
   getLocalServerCapabilities,
   openLocalServerWorkspace,
@@ -70,6 +74,20 @@ const folderSnapshot = (
   directories: [...snapshot.directories],
 })
 
+const appendWorkspacePath = (root: string, relative: string) => {
+  const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/'
+  const normalizedRoot = root.replace(/[\\/]+$/, '') || separator
+  const child = relative.replaceAll('/', separator)
+  return normalizedRoot === separator
+    ? `${normalizedRoot}${child}`
+    : `${normalizedRoot}${separator}${child}`
+}
+
+const splitSelectedName = (name: string) => {
+  const parts = name.replaceAll('\\', '/').split('/').filter(Boolean)
+  return { fileName: parts.pop(), parent: parts.join('/') }
+}
+
 const findLocalFileHandle = async (
   directory: LocalDirectoryHandle,
   name: string,
@@ -94,8 +112,57 @@ const findLocalFileHandle = async (
   return undefined
 }
 
+const findLocalDirectoryHandle = async (
+  directory: LocalDirectoryHandle,
+  name: string,
+) => {
+  let currentDirectory = directory
+  for (const part of name.split('/').filter(Boolean)) {
+    let match: LocalEntryHandle | undefined
+    for await (const [entryName, entry] of currentDirectory.entries()) {
+      if (entryName === part) {
+        match = entry
+        break
+      }
+    }
+    if (!match || match.kind !== 'directory') return undefined
+    currentDirectory = match
+  }
+  return currentDirectory
+}
+
 const localServerBridgeIsAvailable = () =>
   import.meta.env.DEV || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
+
+const localServerStartPath = async (
+  defaultPath: string,
+  storage: StorageLike | undefined,
+) => {
+  let remembered: string | null | undefined
+  try {
+    remembered = storage?.getItem(LOCAL_SERVER_PATH_KEY)
+  } catch {
+    return defaultPath
+  }
+  if (!remembered) return defaultPath
+  try {
+    await browseLocalServerDirectory(remembered)
+    return remembered
+  } catch {
+    return defaultPath
+  }
+}
+
+const rememberLocalServerPath = (
+  storage: StorageLike | undefined,
+  path: string,
+) => {
+  try {
+    storage?.setItem(LOCAL_SERVER_PATH_KEY, path)
+  } catch {
+    // Remembering the picker location is optional when browser storage is unavailable.
+  }
+}
 
 const createLocalServerBackend = (): WorkspaceBackend => {
   let workspace: LocalServerWorkspace | undefined
@@ -134,14 +201,47 @@ const createLocalServerBackend = (): WorkspaceBackend => {
       const capabilities = await getLocalServerCapabilities()
       if (!capabilities) return undefined
       const requestedPath = await pickLocalServerFolder(
-        storage?.getItem(LOCAL_SERVER_PATH_KEY) ?? capabilities.defaultPath,
+        await localServerStartPath(capabilities.defaultPath, storage),
       )
       if (!requestedPath) return undefined
       const snapshot = await openLocalServerWorkspace(requestedPath)
       workspace = snapshot.workspace
       currentSnapshot = serverSnapshot(snapshot)
-      storage?.setItem(LOCAL_SERVER_PATH_KEY, snapshot.workspace.path)
+      rememberLocalServerPath(storage, snapshot.workspace.path)
       return currentSnapshot
+    },
+    async openFile(chooseFile: WorkspaceFileChooser): Promise<WorkspaceFileSelection | undefined> {
+      const capabilities = await getLocalServerCapabilities()
+      if (!capabilities) return undefined
+      const selectedPath = await pickLocalServerFolder(
+        await localServerStartPath(capabilities.defaultPath, storage),
+        { title: 'Choose a folder containing a Markdown or CSV file' },
+      )
+      if (!selectedPath) return undefined
+      const root = await openLocalServerWorkspace(selectedPath)
+      const candidates = root.files
+        .filter((file) => isEditableDocumentFile(file.name))
+        .map(({ name, markdown }) => ({ name, markdown }))
+      const chosenName = await chooseFile(candidates)
+      if (!chosenName || !candidates.some((file) => file.name === chosenName)) {
+        return undefined
+      }
+      const { fileName, parent } = splitSelectedName(chosenName)
+      if (!fileName) return undefined
+      const parentPath = parent
+        ? appendWorkspacePath(root.workspace.path, parent)
+        : root.workspace.path
+      const selectedWorkspace = parent
+        ? await openLocalServerWorkspace(parentPath)
+        : root
+      const snapshot = serverSnapshot(selectedWorkspace)
+      if (!snapshot.files.some((file) => file.name === fileName)) {
+        throw new Error('The selected file is no longer available in its parent folder.')
+      }
+      workspace = selectedWorkspace.workspace
+      currentSnapshot = snapshot
+      rememberLocalServerPath(storage, parentPath)
+      return { snapshot, fileName }
     },
     async restore() {
       if (!localServerBridgeIsAvailable() || !storage?.getItem(LOCAL_SERVER_PATH_KEY)) {
@@ -234,6 +334,33 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
       const snapshot = await refresh(selected, false)
       await rememberLocalDirectory(selected).catch(() => undefined)
       return snapshot
+    },
+    async openFile(chooseFile: WorkspaceFileChooser) {
+      const selected = await pickLocalDirectory()
+      if (!selected) return undefined
+      const rootSnapshot = folderSnapshot(selected, await readLocalWorkspace(selected))
+      const candidates = rootSnapshot.files.filter((file) =>
+        isEditableDocumentFile(file.name))
+      const chosenName = await chooseFile(candidates)
+      if (!chosenName || !candidates.some((file) => file.name === chosenName)) {
+        return undefined
+      }
+      const { fileName, parent } = splitSelectedName(chosenName)
+      if (!fileName) return undefined
+      const parentDirectory = parent
+        ? await findLocalDirectoryHandle(selected, parent)
+        : selected
+      if (!parentDirectory) {
+        throw new Error('The selected file parent folder is no longer available.')
+      }
+      const snapshot = parent
+        ? await refresh(parentDirectory, true)
+        : (directory = selected, currentSnapshot = rootSnapshot, rootSnapshot)
+      if (!snapshot.files.some((file) => file.name === fileName)) {
+        throw new Error('The selected file is no longer available in its parent folder.')
+      }
+      await rememberLocalDirectory(parentDirectory).catch(() => undefined)
+      return { snapshot, fileName }
     },
     async restore() {
       const selected = await restoreLocalDirectory()

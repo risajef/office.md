@@ -1,3 +1,5 @@
+import { isEditableDocumentFile } from './editable-files'
+
 export type WorkspaceFileSnapshot = {
   name: string
   markdown: string
@@ -15,12 +17,22 @@ export type WorkspaceSnapshot = {
   directories: string[]
 }
 
+export type WorkspaceFileSelection = {
+  snapshot: WorkspaceSnapshot
+  fileName: string
+}
+
+export type WorkspaceFileChooser = (
+  files: WorkspaceFileSnapshot[],
+) => Promise<string | undefined>
+
 export type WorkspacePortHost = 'web' | 'electron' | 'memory'
 
 export type WorkspaceBackend = {
   readonly name: string
   isAvailable: () => Promise<boolean>
   open: () => Promise<WorkspaceSnapshot | undefined>
+  openFile?: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
   reload: () => Promise<WorkspaceSnapshot>
   readFile: (name: string) => Promise<string>
@@ -36,6 +48,7 @@ export type WorkspacePort = {
   readonly host: WorkspacePortHost
   readonly workspace: WorkspaceInfo | undefined
   open: () => Promise<WorkspaceSnapshot | undefined>
+  openFile: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
   reload: () => Promise<WorkspaceSnapshot>
   readFile: (name: string) => Promise<string>
@@ -79,6 +92,29 @@ export const createBackendWorkspacePort = (
         const snapshot = await backend.open()
         if (snapshot) return setActiveBackend(backend, snapshot)
         return undefined
+      }
+      throw new Error('No supported local workspace access is available.')
+    },
+    async openFile(chooseFile) {
+      let available = false
+      for (const backend of backends) {
+        if (!await backend.isAvailable()) continue
+        available = true
+        if (!backend.openFile) continue
+        const selection = await backend.openFile(chooseFile)
+        if (!selection) return undefined
+        setActiveBackend(backend, selection.snapshot)
+        return {
+          snapshot: {
+            workspace: { ...selection.snapshot.workspace },
+            files: selection.snapshot.files.map((file) => ({ ...file })),
+            directories: [...selection.snapshot.directories],
+          },
+          fileName: selection.fileName,
+        }
+      }
+      if (available) {
+        throw new Error('Open File is not supported by the available workspace host.')
       }
       throw new Error('No supported local workspace access is available.')
     },
@@ -147,6 +183,39 @@ const sortedSnapshot = (
   directories: [...directories].sort((left, right) => left.localeCompare(right)),
 })
 
+const snapshotForParent = (
+  source: WorkspaceSnapshot,
+  selectedName: string,
+): WorkspaceFileSelection | undefined => {
+  const parts = selectedName.replaceAll('\\', '/').split('/').filter(Boolean)
+  const fileName = parts.pop()
+  if (!fileName) return undefined
+  const parent = parts.join('/')
+  const prefix = parent ? `${parent}/` : ''
+  const pathSeparator = source.workspace.path.includes('\\') ? '\\' : '/'
+  const workspacePath = parent
+    ? `${source.workspace.path.replace(/[\\/]+$/, '')}${pathSeparator}${parent.replaceAll('/', pathSeparator)}`
+    : source.workspace.path
+  const workspaceName = parent.split('/').at(-1) || source.workspace.name
+  return {
+    snapshot: {
+      workspace: {
+        ...source.workspace,
+        id: parent ? `${source.workspace.id}:${parent}` : source.workspace.id,
+        name: workspaceName,
+        path: workspacePath,
+      },
+      files: source.files
+        .filter((file) => file.name.startsWith(prefix))
+        .map((file) => ({ ...file, name: file.name.slice(prefix.length) })),
+      directories: source.directories
+        .filter((directory) => directory.startsWith(prefix))
+        .map((directory) => directory.slice(prefix.length)),
+    },
+    fileName,
+  }
+}
+
 /**
  * Deterministic public port implementation used by application tests.
  * Production hosts provide the same contract through their own adapters.
@@ -181,6 +250,21 @@ export const createMemoryWorkspacePort = (
     async open() {
       opened = true
       return snapshot()
+    },
+    async openFile(chooseFile) {
+      const openedSnapshot = snapshot()
+      const candidates = openedSnapshot.files.filter((file) =>
+        isEditableDocumentFile(file.name))
+      const fileName = await chooseFile(candidates)
+      if (
+        !fileName ||
+        !candidates.some((file) => file.name === fileName) ||
+        !files.has(normalizedWorkspacePath(fileName))
+      ) return undefined
+      const selection = snapshotForParent(openedSnapshot, fileName)
+      if (!selection) return undefined
+      opened = true
+      return selection
     },
     async restore() {
       if (!opened) return undefined

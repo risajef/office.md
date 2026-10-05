@@ -74,6 +74,23 @@ describe('HTML document export', () => {
     expect(html).toContain('aria-label="Styled export"')
   })
 
+  it('inlines an active external theme without a style-folder path dependency', () => {
+    const external = document.createElement('style')
+    external.dataset.documentTheme = 'style-folder:library/theme.css'
+    external.textContent = '.editor-wrap .ProseMirror { color: rgb(200, 20, 20); }'
+    document.head.append(external)
+
+    const html = createDocumentExportHtml({
+      editorRoot: exportRoot(),
+      title: 'External theme export',
+      layout: { width: 794, height: 1123, margin: 56, gap: 28, pageCount: 1 },
+    })
+
+    expect(html).toContain('color: rgb(200, 20, 20)')
+    expect(html).not.toContain('style-folder:library')
+    expect(html).not.toContain('theme.css')
+  })
+
   it('loads the print document, invokes printing, and removes the frame afterward', async () => {
     const printing = printDocumentHtml('<!doctype html><title>Printable</title>')
     const frame = document.querySelector<HTMLIFrameElement>('iframe[title="Print preview"]')

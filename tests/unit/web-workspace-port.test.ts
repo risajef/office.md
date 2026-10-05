@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createWebWorkspacePort } from '../../src/web-workspace-port'
+import {
+  createDefaultWebWorkspaceBackends,
+  createWebWorkspacePort,
+} from '../../src/web-workspace-port'
 import type {
   WorkspaceBackend,
   WorkspaceSnapshot,
 } from '../../src/workspace-port'
+import type {
+  LocalDirectoryHandle,
+  LocalEntryHandle,
+  LocalFileHandle,
+} from '../../src/local-file-system'
 
 const snapshot = (name: string): WorkspaceSnapshot => ({
   workspace: {
@@ -75,5 +83,72 @@ describe('Web workspace port', () => {
     const port = createWebWorkspacePort([unavailable])
 
     await expect(port.open()).rejects.toThrow('No supported local workspace access')
+  })
+
+  it('filters browser folder-access file choices and opens the selected file parent', async () => {
+    const createFile = (name: string, contents: string): LocalFileHandle => ({
+      kind: 'file' as const,
+      name,
+      getFile: async () => ({ text: async () => contents }) as File,
+      createWritable: async () => ({
+        write: async () => undefined,
+        close: async () => undefined,
+      }),
+      queryPermission: async () => 'granted' as const,
+      requestPermission: async () => 'granted' as const,
+    })
+    const createDirectory = (
+      name: string,
+      entries: Map<string, LocalEntryHandle>,
+    ): LocalDirectoryHandle => ({
+      kind: 'directory' as const,
+      name,
+      entries: async function* () { yield* entries.entries() },
+      queryPermission: async () => 'granted' as const,
+      requestPermission: async () => 'granted' as const,
+    })
+    const nested = createDirectory('nested', new Map<string, LocalEntryHandle>([
+      ['selected.md', createFile('selected.md', '# Selected\n')],
+      ['table.csv', createFile('table.csv', 'name,value\nAlpha,1\n')],
+      ['theme.css', createFile('theme.css', 'body {}')],
+      ['notes.txt', createFile('notes.txt', 'unsupported')],
+    ]))
+    const root = createDirectory('project', new Map<string, LocalEntryHandle>([
+      ['nested', nested],
+      ['root.md', createFile('root.md', '# Root\n')],
+    ]))
+    const originalPicker = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker')
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(async () => root),
+    })
+
+    try {
+      const backend = createDefaultWebWorkspaceBackends()[1]
+      const port = createWebWorkspacePort([backend])
+      const selection = await port.openFile(async (files) => {
+        expect(files.map((file) => file.name)).toEqual([
+          'nested/selected.md',
+          'nested/table.csv',
+          'root.md',
+        ])
+        return 'nested/selected.md'
+      })
+
+      expect(selection?.fileName).toBe('selected.md')
+      expect(selection?.snapshot.workspace.name).toBe('nested')
+      expect(selection?.snapshot.files.map((file) => file.name)).toEqual([
+        'selected.md',
+        'table.csv',
+        'theme.css',
+      ])
+      expect(port.workspace?.name).toBe('nested')
+    } finally {
+      if (originalPicker) {
+        Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
+      } else {
+        delete (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker
+      }
+    }
   })
 })

@@ -48,13 +48,14 @@ export type LocalEntryHandle = LocalFileHandle | LocalDirectoryHandle
 
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: (
-    options?: LocalPermissionOptions & { id?: string },
+    options?: LocalPermissionOptions & { id?: string; startIn?: LocalDirectoryHandle },
   ) => Promise<LocalDirectoryHandle>
 }
 
 const HANDLE_DATABASE = 'office-md-local-workspace'
 const HANDLE_STORE = 'handles'
 const WORKSPACE_HANDLE_KEY = 'active-workspace'
+let lastWorkspaceDirectory: LocalDirectoryHandle | undefined
 
 export type LocalTextFile = {
   name: string
@@ -67,6 +68,15 @@ export type LocalWorkspace = {
   directories: string[]
 }
 
+export type LocalStyleFile = {
+  name: string
+  contents: string
+}
+
+export type LocalStyleFolder = {
+  files: LocalStyleFile[]
+}
+
 export const pickLocalDirectory = async () => {
   const picker = (window as DirectoryPickerWindow).showDirectoryPicker
   if (!picker) {
@@ -76,12 +86,43 @@ export const pickLocalDirectory = async () => {
   }
 
   try {
-    const directory = await picker({
+    const options = {
       id: 'office-md-workspace',
       mode: 'readwrite',
+      ...(lastWorkspaceDirectory ? { startIn: lastWorkspaceDirectory } : {}),
+    } as const
+    const directory = await picker(options).catch((error: unknown) => {
+      if (!lastWorkspaceDirectory || !(error instanceof TypeError)) throw error
+      return picker({ id: 'office-md-workspace', mode: 'readwrite' })
     })
     if (!await ensureLocalPermission(directory, 'readwrite', true)) {
       throw new Error('Write permission was denied for the selected folder.')
+    }
+    return directory
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return undefined
+    }
+    throw error
+  }
+}
+
+/** Pick a read-only directory for CSS themes without requesting write access. */
+export const pickLocalStyleDirectory = async () => {
+  const picker = (window as DirectoryPickerWindow).showDirectoryPicker
+  if (!picker) {
+    throw new Error(
+      'Folder access is not available in this browser. Use a recent Chromium-based browser over HTTPS or localhost.',
+    )
+  }
+
+  try {
+    const directory = await picker({
+      id: 'office-md-style-folder',
+      mode: 'read',
+    })
+    if (!await ensureLocalPermission(directory, 'read', true)) {
+      throw new Error('Read permission was denied for the selected style folder.')
     }
     return directory
   } catch (error) {
@@ -143,6 +184,7 @@ const transactionComplete = (transaction: IDBTransaction) =>
 export const rememberLocalDirectory = async (
   directory: LocalDirectoryHandle,
 ) => {
+  lastWorkspaceDirectory = directory
   const database = await openHandleDatabase()
   try {
     const transaction = database.transaction(HANDLE_STORE, 'readwrite')
@@ -174,11 +216,15 @@ export const restoreLocalDirectory = async () => {
     ) {
       return undefined
     }
-    return result as LocalDirectoryHandle
+    const directory = result as LocalDirectoryHandle
+    lastWorkspaceDirectory = directory
+    return directory
   } finally {
     database.close()
   }
 }
+
+void restoreLocalDirectory().catch(() => undefined)
 
 export const readLocalWorkspace = async (
   directory: LocalDirectoryHandle,
@@ -220,6 +266,32 @@ export const readLocalTextFiles = async (
 ) => (await readLocalWorkspace(directory, prefix)).files.filter(
   (file) => isEditableTextFile(file.name),
 )
+
+export const readLocalStyleFolder = async (
+  directory: LocalDirectoryHandle,
+  prefix = '',
+): Promise<LocalStyleFolder> => {
+  const files: LocalStyleFile[] = []
+
+  for await (const [name, entry] of directory.entries()) {
+    if (entry.kind === 'directory') {
+      if (shouldSkipDirectory(name)) continue
+      const child = await readLocalStyleFolder(entry, `${prefix}${name}/`)
+      files.push(...child.files)
+      continue
+    }
+    if (name.startsWith('.') || !name.toLowerCase().endsWith('.css')) continue
+    const file = await entry.getFile()
+    files.push({
+      name: `${prefix}${name}`,
+      contents: await file.text(),
+    })
+  }
+
+  return {
+    files: files.sort((left, right) => left.name.localeCompare(right.name)),
+  }
+}
 
 export const writeLocalTextFile = async (
   file: LocalTextFile | { handle: LocalFileHandle; markdown: string },
