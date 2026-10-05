@@ -75,7 +75,7 @@ jobs:
             target: --win
             extension: .exe
             metadata: latest.yml
-            blockmap: .exe.blockmap
+            blockmap: .blockmap
     steps:
       - name: Check out source
         uses: actions/checkout@v4
