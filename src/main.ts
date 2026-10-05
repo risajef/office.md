@@ -3275,6 +3275,8 @@ const startEditor = async () => {
   startupOpenFileButton?.addEventListener('click', () => {
     void runWorkspaceAction(() => openLocalFile(editor))
   })
+  if (startupOpenFolderButton) startupOpenFolderButton.disabled = false
+  if (startupOpenFileButton) startupOpenFileButton.disabled = false
 
   const renameActiveFile = () => {
     const file = activeFile()

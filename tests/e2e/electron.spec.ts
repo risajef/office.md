@@ -46,6 +46,7 @@ const startXvfb = () => new Promise<{
 
 const openTestWorkspace = async (page: Page) => {
   await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('#startup-open-folder')).toBeEnabled({ timeout: 30_000 })
   await page.locator('#startup-open-folder').click()
   await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 30_000 })
 }
@@ -109,6 +110,7 @@ test('Electron opens a selected Markdown file with its immediate parent workspac
     })
     const page = application.windows()[0] ?? await application.firstWindow()
     await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#startup-open-file')).toBeEnabled({ timeout: 30_000 })
     await page.locator('#startup-open-file').click()
     await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('#folder-status')).toContainText('nested · 1 files · disk-backed')

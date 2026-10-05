@@ -72,6 +72,20 @@ The system SHALL ask the user to open a folder or an editable Markdown or CSV fi
 - **WHEN** the most recently selected location no longer exists or cannot be accessed
 - **THEN** the folder or file selector starts at the host's normal starting location
 
+### Requirement: Keep startup selection actions unavailable until ready
+
+The system SHALL keep the startup folder and file actions disabled until it can process their requests. Once enabled, activating an action SHALL begin the corresponding selection flow.
+
+#### Scenario: Startup choice is visible while the application initializes
+
+- **WHEN** the startup choice is visible before its selection actions can be handled
+- **THEN** the folder and file actions remain disabled until the application is ready
+
+#### Scenario: User activates a ready startup selection action
+
+- **WHEN** the user activates the folder or file action after it becomes enabled
+- **THEN** the corresponding selection flow begins and is not silently ignored
+
 ### Requirement: Open an editable file together with its parent workspace
 
 The system SHALL let the user select Markdown and CSV files through Open File. The selection SHALL exclude other workspace file types. When a file is selected, the system SHALL open its parent folder as the workspace and activate the selected file.

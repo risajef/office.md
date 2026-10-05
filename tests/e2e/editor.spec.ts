@@ -146,6 +146,46 @@ const test = base.extend<{ workspace: Workspace }>({
   }, { auto: true }],
 })
 
+base('keeps startup selection controls disabled until they can handle requests', async ({ page }) => {
+  await page.addInitScript(() => {
+    const startupWindow = window as typeof window & {
+      __startupInitialControlState?: {
+        folderDisabled: boolean
+        fileDisabled: boolean
+      }
+    }
+    const captureInitialState = () => {
+      const folder = document.querySelector<HTMLButtonElement>('#startup-open-folder')
+      const file = document.querySelector<HTMLButtonElement>('#startup-open-file')
+      if (!folder || !file) return
+      startupWindow.__startupInitialControlState = {
+        folderDisabled: folder.disabled,
+        fileDisabled: file.disabled,
+      }
+      observer.disconnect()
+    }
+    const observer = new MutationObserver(captureInitialState)
+    observer.observe(document, { childList: true, subtree: true })
+    captureInitialState()
+  })
+  await page.goto('/')
+  await expect(page.locator('#startup-choice')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => {
+    const startupWindow = window as typeof window & {
+      __startupInitialControlState?: {
+        folderDisabled: boolean
+        fileDisabled: boolean
+      }
+    }
+    return startupWindow.__startupInitialControlState ?? null
+  })).toEqual({ folderDisabled: true, fileDisabled: true })
+  await expect(page.locator('#startup-open-folder')).toBeEnabled()
+  await expect(page.locator('#startup-open-file')).toBeEnabled()
+
+  await page.locator('#startup-open-folder').click()
+  await expect(page.locator('.folder-picker-dialog')).toBeVisible()
+})
+
 base('asks where to work before restoring the previous workspace', async ({ page }) => {
   const workspace = await seedWorkspace()
   try {
