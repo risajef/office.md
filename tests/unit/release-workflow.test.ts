@@ -56,7 +56,8 @@ describe('Electron release workflow contract', () => {
   it('ships both provider metadata files and their blockmaps with platform packages', () => {
     expect(workflow).toContain('latest-linux.yml')
     expect(workflow).toContain('latest.yml')
-    expect(workflow).toContain('.exe.blockmap')
+    expect(workflow).toContain('blockmap: .blockmap')
+    expect(workflow).toContain('${{ matrix.extension }}${{ matrix.blockmap }}')
     expect(workflow).toContain('if-no-files-found: error')
     expect(workflow).toMatch(/release:check-assets[\s\S]*?release:publish/)
   })
