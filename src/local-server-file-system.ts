@@ -113,6 +113,30 @@ export const writeLocalServerFile = (
   markdown: string,
 ) => post<{ ok: true }>('write', { workspaceId, name, markdown })
 
+export const writeLocalServerImage = async (
+  workspaceId: string,
+  directory: string,
+  suggestedName: string,
+  bytes: Uint8Array,
+) => {
+  const query = new URLSearchParams({ workspaceId, directory, name: suggestedName })
+  const contents = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(contents).set(bytes)
+  const response = await fetch(`${API_ROOT}/write-image?${query}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/octet-stream',
+    },
+    body: contents,
+  })
+  const result = await readJson<{ name?: unknown }>(response)
+  if (typeof result.name !== 'string') {
+    throw new Error('The local filesystem bridge returned an invalid image path.')
+  }
+  return result.name
+}
+
 export const renameLocalServerFile = (
   workspaceId: string,
   oldName: string,

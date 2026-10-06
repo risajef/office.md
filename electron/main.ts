@@ -154,6 +154,7 @@ const registerWorkspaceHandlers = () => {
     ['readFile', ELECTRON_WORKSPACE_CHANNELS.readFile],
     ['readAssetUrl', ELECTRON_WORKSPACE_CHANNELS.readAssetUrl],
     ['writeFile', ELECTRON_WORKSPACE_CHANNELS.writeFile],
+    ['saveImageAsset', ELECTRON_WORKSPACE_CHANNELS.saveImageAsset],
     ['renameFile', ELECTRON_WORKSPACE_CHANNELS.renameFile],
     ['createDirectory', ELECTRON_WORKSPACE_CHANNELS.createDirectory],
     ['deleteFile', ELECTRON_WORKSPACE_CHANNELS.deleteFile],

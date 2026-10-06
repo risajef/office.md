@@ -1,4 +1,8 @@
-import { isEditableDocumentFile } from './editable-files'
+import {
+  imageMimeType,
+  isEditableDocumentFile,
+  isImageFile,
+} from './editable-files'
 
 export type WorkspaceFileSnapshot = {
   name: string
@@ -38,6 +42,11 @@ export type WorkspaceBackend = {
   readFile: (name: string) => Promise<string>
   readAssetUrl: (name: string) => Promise<string | undefined>
   writeFile: (name: string, markdown: string) => Promise<void>
+  saveImageAsset: (
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => Promise<string>
   renameFile: (oldName: string, newName: string) => Promise<void>
   createDirectory: (name: string) => Promise<void>
   deleteFile: (name: string) => Promise<void>
@@ -54,6 +63,11 @@ export type WorkspacePort = {
   readFile: (name: string) => Promise<string>
   readAssetUrl: (name: string) => Promise<string | undefined>
   writeFile: (name: string, markdown: string) => Promise<void>
+  saveImageAsset: (
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => Promise<string>
   renameFile: (oldName: string, newName: string) => Promise<void>
   createDirectory: (name: string) => Promise<void>
   deleteFile: (name: string) => Promise<void>
@@ -137,6 +151,8 @@ export const createBackendWorkspacePort = (
     readFile: (name) => requireBackend().readFile(name),
     readAssetUrl: (name) => requireBackend().readAssetUrl(name),
     writeFile: (name, markdown) => requireBackend().writeFile(name, markdown),
+    saveImageAsset: (directory, suggestedName, bytes) =>
+      requireBackend().saveImageAsset(directory, suggestedName, bytes),
     renameFile: async (oldName, newName) => {
       const backend = requireBackend()
       await backend.renameFile(oldName, newName)
@@ -170,6 +186,46 @@ const workspacePathParts = (name: string) => {
 }
 
 const normalizedWorkspacePath = (name: string) => workspacePathParts(name).join('/')
+
+const workspaceDirectoryPath = (name: string) => {
+  const normalized = name.trim().replaceAll('\\', '/')
+  return normalized ? normalizedWorkspacePath(normalized) : ''
+}
+
+const uniqueImagePath = (
+  directory: string,
+  suggestedName: string,
+  exists: (name: string) => boolean,
+) => {
+  if (
+    suggestedName.includes('/') ||
+    suggestedName.includes('\\') ||
+    !isImageFile(suggestedName)
+  ) {
+    throw invalidWorkspacePath()
+  }
+  const extensionIndex = suggestedName.lastIndexOf('.')
+  const baseName = suggestedName.slice(0, extensionIndex)
+  const extension = suggestedName.slice(extensionIndex)
+  let counter = 1
+  let fileName = suggestedName
+  let relativePath = directory ? `${directory}/${fileName}` : fileName
+  while (exists(relativePath)) {
+    counter += 1
+    fileName = `${baseName}-${counter}${extension}`
+    relativePath = directory ? `${directory}/${fileName}` : fileName
+  }
+  return relativePath
+}
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
 
 const sortedSnapshot = (
   workspace: WorkspaceInfo,
@@ -232,6 +288,7 @@ export const createMemoryWorkspacePort = (
     normalizedWorkspacePath(file.name),
     file.markdown,
   ]))
+  const imageBytes = new Map<string, Uint8Array>()
   const directories = new Set(
     (seed.directories ?? []).map(normalizedWorkspacePath),
   )
@@ -281,14 +338,37 @@ export const createMemoryWorkspacePort = (
       if (contents === undefined) throw new Error(`The file ${normalized} was not found.`)
       return contents
     },
-    async readAssetUrl() {
+    async readAssetUrl(name) {
       requireOpen()
-      return undefined
+      const normalized = normalizedWorkspacePath(name)
+      const bytes = imageBytes.get(normalized)
+      if (!bytes) return undefined
+      return `data:${imageMimeType(normalized)};base64,${bytesToBase64(bytes)}`
     },
     async writeFile(name, markdown) {
       requireOpen()
       const normalized = normalizedWorkspacePath(name)
       files.set(normalized, markdown)
+    },
+    async saveImageAsset(directory, suggestedName, bytes) {
+      requireOpen()
+      const normalizedDirectory = workspaceDirectoryPath(directory)
+      if (
+        normalizedDirectory &&
+        !directories.has(normalizedDirectory) &&
+        ![...files.keys()].some((name) => name.startsWith(`${normalizedDirectory}/`))
+      ) {
+        throw new Error(`The folder ${normalizedDirectory} was not found.`)
+      }
+      if (!(bytes instanceof Uint8Array)) throw new Error('The image contents are invalid.')
+      const name = uniqueImagePath(
+        normalizedDirectory,
+        suggestedName,
+        (candidate) => files.has(candidate),
+      )
+      files.set(name, '')
+      imageBytes.set(name, bytes.slice())
+      return name
     },
     async renameFile(oldName, newName) {
       requireOpen()

@@ -1,10 +1,4 @@
-# Markdown Specification
-
-## Purpose
-
-Describe the rich Markdown document experience, linked content, diagrams, document styles, and page-oriented presentation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Edit and render rich Markdown
 

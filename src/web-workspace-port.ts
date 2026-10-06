@@ -19,6 +19,7 @@ import {
   renameLocalTextFile,
   rememberLocalDirectory,
   restoreLocalDirectory,
+  writeLocalImageFile,
   writeLocalTextFile,
   type LocalDirectoryHandle,
   type LocalEntryHandle,
@@ -35,6 +36,7 @@ import {
   reloadLocalServerWorkspace,
   renameLocalServerFile,
   writeLocalServerFile,
+  writeLocalServerImage,
   type LocalServerSnapshot,
   type LocalServerWorkspace,
 } from './local-server-file-system'
@@ -276,6 +278,16 @@ const createLocalServerBackend = (): WorkspaceBackend => {
       await withWorkspace((workspaceId) =>
         writeLocalServerFile(workspaceId, name, markdown))
     },
+    async saveImageAsset(directory, suggestedName, bytes) {
+      const name = await withWorkspace((workspaceId) =>
+        writeLocalServerImage(workspaceId, directory, suggestedName, bytes))
+      if (!currentSnapshot) throw new Error('Open the local folder before saving an image.')
+      if (!currentSnapshot.files.some((file) => file.name === name)) {
+        currentSnapshot.files.push({ name, markdown: '' })
+        currentSnapshot.files.sort((left, right) => left.name.localeCompare(right.name))
+      }
+      return name
+    },
     async renameFile(oldName, newName) {
       await withWorkspace((workspaceId) =>
         renameLocalServerFile(workspaceId, oldName, newName))
@@ -402,6 +414,20 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
         { handle, markdown },
         { requestPermission: false },
       )
+    },
+    async saveImageAsset(imageDirectory, suggestedName, bytes) {
+      const selected = requireDirectory()
+      if (!await ensureLocalPermission(selected, 'readwrite', true)) {
+        throw new Error('Read and write permission is required for this folder.')
+      }
+      const name = await writeLocalImageFile(
+        selected,
+        imageDirectory,
+        suggestedName,
+        bytes,
+      )
+      await refresh(selected, false)
+      return name
     },
     async renameFile(oldName, newName) {
       const selected = requireDirectory()

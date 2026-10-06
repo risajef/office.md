@@ -39,7 +39,7 @@ const sameOriginRequest = (request: IncomingMessage) => {
   return origin === `${protocol}://${request.headers.host}`
 }
 
-const readRequestJson = async (request: IncomingMessage) => {
+const readRequestBytes = async (request: IncomingMessage) => {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
@@ -48,8 +48,13 @@ const readRequestJson = async (request: IncomingMessage) => {
     if (size > MAX_REQUEST_BYTES) throw new Error('Request is too large.')
     chunks.push(buffer)
   }
-  if (!chunks.length) return {} as JsonObject
-  const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  return Buffer.concat(chunks)
+}
+
+const readRequestJson = async (request: IncomingMessage) => {
+  const contents = await readRequestBytes(request)
+  if (!contents.length) return {} as JsonObject
+  const value = JSON.parse(contents.toString('utf8')) as unknown
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Expected a JSON object.')
   }
@@ -124,6 +129,74 @@ const resolveWorkspaceTarget = (root: string, name: string) => {
     throw new Error('The file path must stay inside the open folder.')
   }
   return target
+}
+
+const resolveWorkspaceDirectory = async (root: string, name: string) => {
+  const normalizedName = name.replaceAll('\\', '/')
+  const target = normalizedName
+    ? resolveWorkspaceTarget(root, normalizedName)
+    : root
+  const resolved = await fs.realpath(target)
+  const resolvedRoot = await fs.realpath(root)
+  const relative = path.relative(resolvedRoot, resolved)
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('The image folder must stay inside the open folder.')
+  }
+  const stats = await fs.stat(resolved)
+  if (!stats.isDirectory()) throw new Error('The image folder is not a folder.')
+  return { path: resolved, name: normalizedName }
+}
+
+const writeWorkspaceImage = async (
+  root: string,
+  directory: string,
+  suggestedName: string,
+  bytes: Buffer,
+) => {
+  if (
+    suggestedName.includes('/') ||
+    suggestedName.includes('\\') ||
+    !isImageFile(suggestedName)
+  ) {
+    throw new Error('The image file name is invalid.')
+  }
+  if (!bytes.length) throw new Error('The image contents are invalid.')
+  const folder = await resolveWorkspaceDirectory(root, directory)
+  const parsed = path.parse(suggestedName)
+
+  for (let counter = 1; counter <= 10_000; counter += 1) {
+    const candidate = counter === 1
+      ? suggestedName
+      : `${parsed.name}-${counter}${parsed.ext}`
+    const target = path.join(folder.path, candidate)
+    let handle
+    try {
+      handle = await fs.open(target, 'wx')
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'EEXIST'
+      ) continue
+      throw error
+    }
+
+    try {
+      await handle.writeFile(bytes)
+      await handle.close()
+      return folder.name ? `${folder.name}/${candidate}` : candidate
+    } catch (error) {
+      await handle.close().catch(() => undefined)
+      await fs.rm(target, { force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+  throw new Error('Could not find an unused image filename.')
 }
 
 const resolveStyleTarget = async (root: string, name: string) => {
@@ -218,6 +291,20 @@ const installFilesystemMiddleware = (
         response.setHeader('Content-Type', imageMimeType(name))
         response.setHeader('Cache-Control', 'no-store')
         response.end(await fs.readFile(target))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === `${API_ROOT}/write-image`) {
+        const workspaceId = url.searchParams.get('workspaceId')
+        const directory = url.searchParams.get('directory')
+        const name = url.searchParams.get('name')
+        if (!workspaceId || directory === null || !name) {
+          throw new Error('The image write request is invalid.')
+        }
+        const root = workspaces.get(workspaceId)
+        if (!root) throw new Error('The folder session expired. Open the folder again.')
+        const bytes = await readRequestBytes(request)
+        const savedName = await writeWorkspaceImage(root, directory, name, bytes)
+        sendJson(response, 200, { name: savedName })
         return
       }
       if (request.method !== 'POST') {

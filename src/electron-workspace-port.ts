@@ -52,6 +52,9 @@ const createElectronBackend = (
   writeFile: async () => {
     throw new Error('The Electron workspace session is missing.')
   },
+  saveImageAsset: async () => {
+    throw new Error('The Electron workspace session is missing.')
+  },
   renameFile: async () => {
     throw new Error('The Electron workspace session is missing.')
   },
@@ -122,6 +125,10 @@ export const createElectronWorkspacePort = (
     writeFile: (name, markdown) => withWorkspace((id) => api?.writeFile(id, name, markdown) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
+    saveImageAsset: (directory, suggestedName, bytes) => withWorkspace((id) =>
+      api?.saveImageAsset(id, directory, suggestedName, bytes) ?? Promise.reject(
+        new Error('The Electron workspace bridge is unavailable.'),
+      )),
     renameFile: (oldName, newName) => withWorkspace((id) => api?.renameFile(id, oldName, newName) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),

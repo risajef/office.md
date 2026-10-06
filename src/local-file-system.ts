@@ -5,8 +5,9 @@ import {
 } from './editable-files'
 
 export type LocalWritable = {
-  write: (contents: string) => Promise<void>
+  write: (contents: string | Uint8Array) => Promise<void>
   close: () => Promise<void>
+  abort?: () => Promise<void>
 }
 
 type LocalPermissionOptions = {
@@ -307,6 +308,64 @@ export const writeLocalTextFile = async (
   const writable = await file.handle.createWritable()
   await writable.write(file.markdown)
   await writable.close()
+}
+
+export const writeLocalImageFile = async (
+  root: LocalDirectoryHandle,
+  directory: string,
+  suggestedName: string,
+  bytes: Uint8Array,
+) => {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    throw new Error('The image contents are invalid.')
+  }
+  if (
+    suggestedName.includes('/') ||
+    suggestedName.includes('\\') ||
+    !isImageFile(suggestedName)
+  ) {
+    throw new Error('The image file name is invalid.')
+  }
+  const directoryParts = directory.trim()
+    ? visibleLocalPathParts(directory.replaceAll('\\', '/'))
+    : []
+  const parts = [...directoryParts, suggestedName]
+  const parent = await localParentDirectory(root, parts, false)
+  if (!parent.getFileHandle || !parent.removeEntry) {
+    throw new Error('This browser cannot save image files here.')
+  }
+  const extensionIndex = suggestedName.lastIndexOf('.')
+  const baseName = suggestedName.slice(0, extensionIndex)
+  const extension = suggestedName.slice(extensionIndex)
+
+  for (let counter = 1; counter <= 10_000; counter += 1) {
+    const candidate = counter === 1
+      ? suggestedName
+      : `${baseName}-${counter}${extension}`
+    if (await hasLocalEntry(parent, candidate)) continue
+
+    let file: LocalFileHandle
+    try {
+      file = await parent.getFileHandle(candidate, { create: true })
+    } catch (error) {
+      if (await hasLocalEntry(parent, candidate)) continue
+      throw error
+    }
+    if (file.kind !== 'file') continue
+
+    let writable: LocalWritable | undefined
+    try {
+      writable = await file.createWritable()
+      await writable.write(bytes)
+      await writable.close()
+      return [...directoryParts, candidate].join('/')
+    } catch (error) {
+      await writable?.abort?.().catch(() => undefined)
+      await parent.removeEntry(candidate).catch(() => undefined)
+      throw error
+    }
+  }
+  throw new Error('Could not find an unused image filename.')
 }
 
 const localPathParts = (name: string) => {

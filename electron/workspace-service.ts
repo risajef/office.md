@@ -26,6 +26,12 @@ export type ElectronWorkspaceRequest =
   | (WorkspaceRequestBase & { operation: 'readAssetUrl'; name: string })
   | (WorkspaceRequestBase & { operation: 'writeFile'; name: string; markdown: string })
   | (WorkspaceRequestBase & {
+      operation: 'saveImageAsset'
+      directory: string
+      suggestedName: string
+      bytes: Uint8Array
+    })
+  | (WorkspaceRequestBase & {
       operation: 'renameFile'
       oldName: string
       newName: string
@@ -48,6 +54,12 @@ export type ElectronWorkspaceService = {
   readFile: (workspaceId: string, name: string) => Promise<string>
   readAssetUrl: (workspaceId: string, name: string) => Promise<string | undefined>
   writeFile: (workspaceId: string, name: string, markdown: string) => Promise<void>
+  saveImageAsset: (
+    workspaceId: string,
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => Promise<string>
   renameFile: (workspaceId: string, oldName: string, newName: string) => Promise<void>
   createDirectory: (workspaceId: string, name: string) => Promise<void>
   deleteFile: (workspaceId: string, name: string) => Promise<void>
@@ -128,6 +140,25 @@ const resolveWorkspaceTarget = (root: string, name: string) => {
     throw new Error('The file path must stay inside the open folder.')
   }
   return target
+}
+
+const resolveWorkspaceDirectory = async (root: string, name: string) => {
+  const normalizedName = name.replaceAll('\\', '/')
+  const target = normalizedName
+    ? resolveWorkspaceTarget(root, normalizedName)
+    : root
+  const resolved = await fs.realpath(target)
+  const relative = path.relative(root, resolved)
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('The image folder must stay inside the open folder.')
+  }
+  const stats = await fs.stat(resolved)
+  if (!stats.isDirectory()) throw new Error('The image folder is not a folder.')
+  return { path: resolved, name: normalizedName }
 }
 
 const createSnapshot = async (workspace: OpenWorkspace): Promise<WorkspaceSnapshot> => ({
@@ -216,6 +247,57 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     }
   }
 
+  const saveImageAsset = async (
+    workspaceId: string,
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => {
+    if (
+      suggestedName.includes('/') ||
+      suggestedName.includes('\\') ||
+      !isImageFile(suggestedName)
+    ) {
+      throw new Error('The image file name is invalid.')
+    }
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      throw new Error('The image contents are invalid.')
+    }
+    const root = requireWorkspace(workspaceId).root
+    const folder = await resolveWorkspaceDirectory(root, directory)
+    const parsed = path.parse(suggestedName)
+
+    for (let counter = 1; counter <= 10_000; counter += 1) {
+      const candidate = counter === 1
+        ? suggestedName
+        : `${parsed.name}-${counter}${parsed.ext}`
+      const target = path.join(folder.path, candidate)
+      let handle: Awaited<ReturnType<typeof fs.open>>
+      try {
+        handle = await fs.open(target, 'wx')
+      } catch (error) {
+        if (
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'EEXIST'
+        ) continue
+        throw error
+      }
+
+      try {
+        await handle.writeFile(bytes)
+        await handle.close()
+        return folder.name ? `${folder.name}/${candidate}` : candidate
+      } catch (error) {
+        await handle.close().catch(() => undefined)
+        await fs.rm(target, { force: true }).catch(() => undefined)
+        throw error
+      }
+    }
+    throw new Error('Could not find an unused image filename.')
+  }
+
   const renameFile = async (
     workspaceId: string,
     oldName: string,
@@ -295,6 +377,22 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
         await writeFile(value.workspaceId, value.name, value.markdown)
         return { ok: true }
       }
+      case 'saveImageAsset': {
+        const value = request as WorkspaceRequestBase & {
+          directory: string
+          suggestedName: string
+          bytes: Uint8Array
+        }
+        if (typeof value.directory !== 'string' || typeof value.suggestedName !== 'string') {
+          throw new Error('The image write request is invalid.')
+        }
+        return saveImageAsset(
+          value.workspaceId,
+          value.directory,
+          value.suggestedName,
+          value.bytes,
+        )
+      }
       case 'renameFile': {
         const value = request as WorkspaceRequestBase & { oldName: string; newName: string }
         await renameFile(value.workspaceId, value.oldName, value.newName)
@@ -327,6 +425,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     readFile,
     readAssetUrl,
     writeFile,
+    saveImageAsset,
     renameFile,
     createDirectory,
     deleteFile,

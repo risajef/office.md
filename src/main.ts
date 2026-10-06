@@ -6,7 +6,7 @@ import {
   rootCtx,
   serializerCtx,
 } from '@milkdown/kit/core'
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { TextSelection, type SelectionBookmark } from '@milkdown/kit/prose/state'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { listener } from '@milkdown/kit/plugin/listener'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
@@ -62,6 +62,7 @@ import { htmlContentPlugin } from './plugins/html-content-plugin'
 import {
   isEditableDocumentFile,
   isEditableTextFile,
+  imageMimeType,
   isImageFile,
   isWorkspaceFile,
 } from './editable-files'
@@ -1085,7 +1086,7 @@ const insertImageNode = (
   editor: EditorInstance,
   source: string,
   alt: string,
-  position?: number,
+  positionOrBookmark?: number | SelectionBookmark,
 ) => {
   const inserted = editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
@@ -1094,9 +1095,13 @@ const insertImageNode = (
     if (!image) return false
 
     let transaction = view.state.tr
-    if (position !== undefined) {
+    if (typeof positionOrBookmark === 'number') {
       transaction = transaction.setSelection(
-        TextSelection.near(view.state.doc.resolve(position)),
+        TextSelection.near(view.state.doc.resolve(positionOrBookmark)),
+      )
+    } else if (positionOrBookmark) {
+      transaction = transaction.setSelection(
+        positionOrBookmark.resolve(view.state.doc),
       )
     }
     transaction = transaction.replaceSelectionWith(
@@ -1142,6 +1147,39 @@ const readImageFileAsDataUrl = (file: File) => new Promise<string>(
     reader.readAsDataURL(file)
   },
 )
+
+const clipboardImageExtensionByMime: Record<string, string> = {
+  'image/avif': '.avif',
+  'image/bmp': '.bmp',
+  'image/gif': '.gif',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/svg+xml': '.svg',
+  'image/tiff': '.tiff',
+  'image/vnd.microsoft.icon': '.ico',
+  'image/webp': '.webp',
+  'image/x-icon': '.ico',
+}
+
+const clipboardImageFileName = (file: File) => {
+  const mimeType = file.type.toLowerCase().split(';', 1)[0] ?? ''
+  const mimeExtension = clipboardImageExtensionByMime[mimeType]
+  if (!mimeExtension) return undefined
+
+  const candidate = file.name.split(/[\\/]/).at(-1)?.trim() ?? ''
+  const candidateExtension = candidate.slice(candidate.lastIndexOf('.')).toLowerCase()
+  const hasCompatibleName = isImageFile(candidate) &&
+    imageMimeType(candidate) === mimeType
+  const extension = hasCompatibleName ? candidateExtension : mimeExtension
+  const stem = hasCompatibleName
+    ? candidate.slice(0, -candidateExtension.length)
+    : 'pasted-image'
+  const safeStem = stem
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 100)
+  return `${safeStem || 'pasted-image'}${extension}`
+}
 
 const configureImageDrop = (editor: EditorInstance) => {
   if (!editorRoot) return () => undefined
@@ -1192,14 +1230,68 @@ const configureImageDrop = (editor: EditorInstance) => {
       )
     }).catch(() => setStatus('Could not read the dropped image', 'ready'))
   }
+  const onPaste = (event: ClipboardEvent) => {
+    const clipboardData = event.clipboardData
+    if (!clipboardData) return
+
+    let image: File | undefined
+    for (const item of Array.from(clipboardData.items)) {
+      if (item.kind !== 'file') continue
+      const candidate = item.getAsFile()
+      if (candidate && clipboardImageFileName(candidate)) {
+        image = candidate
+        break
+      }
+    }
+    if (!image) {
+      image = Array.from(clipboardData.files).find((candidate) =>
+        Boolean(clipboardImageFileName(candidate)),
+      )
+    }
+
+    const target = activeFile()
+    if (!image || target?.kind !== 'markdown' || !isDiskBackedFile(target)) return
+    const suggestedName = clipboardImageFileName(image)
+    if (!suggestedName) return
+
+    const insertion = editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      return view.editable ? view.state.selection.getBookmark() : undefined
+    })
+    if (!insertion) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    void (async () => {
+      try {
+        const bytes = new Uint8Array(await image.arrayBuffer())
+        const directory = target.name.split('/').slice(0, -1).join('/')
+        const savedName = await workspaceApplication.saveImageAsset(
+          directory,
+          suggestedName,
+          bytes,
+        )
+        const file = registerSavedWorkspaceImage(editor, savedName)
+        const source = relativeWorkspaceImagePath(target.name, file.name)
+        const alt = file.name.split('/').at(-1) ?? file.name
+        if (!insertImageNode(editor, source, alt, insertion)) {
+          setStatus('Could not insert the pasted image', 'ready')
+        }
+      } catch {
+        setStatus('Could not save the pasted image', 'ready')
+      }
+    })()
+  }
 
   editorRoot.addEventListener('dragover', onDragOver)
   editorRoot.addEventListener('dragleave', onDragLeave)
   editorRoot.addEventListener('drop', onDrop, true)
+  editorRoot.addEventListener('paste', onPaste, true)
   return () => {
     editorRoot.removeEventListener('dragover', onDragOver)
     editorRoot.removeEventListener('dragleave', onDragLeave)
     editorRoot.removeEventListener('drop', onDrop, true)
+    editorRoot.removeEventListener('paste', onPaste, true)
     clearDropState()
   }
 }
@@ -1500,6 +1592,35 @@ const renderFileList = (editor: EditorInstance) => {
   }
 
   appendFolderContents(root, fileListElement)
+}
+
+const registerSavedWorkspaceImage = (
+  editor: EditorInstance,
+  name: string,
+) => {
+  if (!isImageFile(name)) throw new Error('The workspace saved an unsupported image path.')
+  const workspace = workspaceApplication.state.workspace
+  if (!workspace) throw new Error('There is no disk-backed workspace.')
+
+  const existing = workspaceFiles.find((file) => file.name === name)
+  if (existing) return existing
+
+  const file: WorkspaceFile = {
+    id: `workspace:${workspace.path}/${name}`,
+    name,
+    markdown: '',
+    kind: 'image',
+    source: 'disk',
+  }
+  workspaceFiles.push(file)
+  workspaceFiles.sort((left, right) => left.name.localeCompare(right.name))
+  persistWorkspace()
+  renderFileList(editor)
+  if (folderStatus) {
+    folderStatus.textContent = `${workspace.name} · ${workspaceApplication.state.files.length} files · disk-backed`
+    folderStatus.title = workspace.path
+  }
+  return file
 }
 
 type CsvWorksheet = {

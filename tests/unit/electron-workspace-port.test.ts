@@ -21,6 +21,8 @@ const createApi = (): ElectronWorkspaceApi => ({
   readFile: vi.fn(async () => '# Read\n'),
   readAssetUrl: vi.fn(async () => 'data:image/png;base64,abc'),
   writeFile: vi.fn(async () => undefined),
+  saveImageAsset: vi.fn(async (_workspaceId, directory, suggestedName) =>
+    directory ? `${directory}/${suggestedName}` : suggestedName),
   renameFile: vi.fn(async () => undefined),
   createDirectory: vi.fn(async () => undefined),
   deleteFile: vi.fn(async () => undefined),
@@ -84,6 +86,24 @@ describe('Electron workspace port', () => {
     expect(api.writeFile).toHaveBeenCalledWith('desktop-workspace-id', 'notes.md', '# Changed\n')
     expect(api.renameFile).toHaveBeenCalledWith('desktop-workspace-id', 'notes.md', 'renamed.md')
     expect(api.createDirectory).toHaveBeenCalledWith('desktop-workspace-id', 'drafts')
+  })
+
+  it('saves image bytes through the Electron workspace API', async () => {
+    const api = Object.assign(createApi(), {
+      saveImageAsset: vi.fn(async () => 'nested/capture.png'),
+    })
+    const port = createElectronWorkspacePort(api)
+    await port.open()
+
+    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+    await expect(port.saveImageAsset('nested', 'capture.png', bytes))
+      .resolves.toBe('nested/capture.png')
+    expect(api.saveImageAsset).toHaveBeenCalledWith(
+      'desktop-workspace-id',
+      'nested',
+      'capture.png',
+      bytes,
+    )
   })
 
   it('reports an unavailable preload bridge without selecting a web fallback', async () => {

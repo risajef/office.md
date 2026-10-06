@@ -5,6 +5,7 @@ import {
   expect,
   test as base,
   type APIRequestContext,
+  type Locator,
   type Page,
 } from '@playwright/test'
 
@@ -123,6 +124,35 @@ const openWorkspace = async (page: Page, directory: string) => {
   )
 }
 
+const placeCaretInEditor = async (editor: Locator, offset = 7) => {
+  await editor.evaluate((element, position) => {
+    const text = element.querySelector('p')?.firstChild
+    if (!text || text.nodeType !== Node.TEXT_NODE) {
+      throw new Error('The Markdown paragraph is missing.')
+    }
+    element.focus()
+    const range = document.createRange()
+    range.setStart(text, position)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }, offset)
+}
+
+const dispatchImagePaste = (editor: Locator, fileName = 'clipboard.svg') =>
+  editor.evaluate((element, { svg, name }) => {
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([svg], name, { type: 'image/svg+xml' }))
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer,
+    })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  }, { svg: imageSvg, name: fileName })
+
 const editMarkdownSource = async (page: Page, markdown: string) => {
   const source = page.locator('#debug-markdown-content')
   await source.fill(markdown)
@@ -184,6 +214,156 @@ base('keeps startup selection controls disabled until they can handle requests',
 
   await page.locator('#startup-open-folder').click()
   await expect(page.locator('.folder-picker-dialog')).toBeVisible()
+})
+
+base('pastes an image beside the active nested Markdown document', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  const nested = path.join(workspace.directory, 'nested')
+  await mkdir(nested)
+  await writeFile(path.join(nested, 'note.md'), '# Nested note\n\nbefore after\n')
+
+  try {
+    await openWorkspace(page, workspace.directory)
+    await page.locator('.file-select[title="Open nested/note.md"]').click()
+    await expect(page.locator('#document-name')).toHaveText('nested/note.md')
+    const editor = page.locator('.ProseMirror')
+    await editor.evaluate((element) => {
+      const text = element.querySelector('p')?.firstChild
+      if (!text || text.nodeType !== Node.TEXT_NODE) {
+        throw new Error('The nested Markdown paragraph is missing.')
+      }
+      element.focus()
+      const range = document.createRange()
+      range.setStart(text, 7)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    })
+
+    const defaultPrevented = await editor.evaluate((element, svg) => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File([svg], 'clipboard.svg', { type: 'image/svg+xml' }))
+      const event = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      })
+      element.dispatchEvent(event)
+      return event.defaultPrevented
+    }, imageSvg)
+
+    expect(defaultPrevented).toBe(true)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /before\s*!\[clipboard\.svg\]\(clipboard\.svg\)\s*after/,
+    )
+    await expect.poll(async () =>
+      readFile(path.join(nested, 'clipboard.svg'), 'utf8').catch(() => undefined),
+    ).toBe(imageSvg)
+    const image = page.locator('.ProseMirror img:not(.ProseMirror-separator)').last()
+    await expect(image).toHaveAttribute('src', /\/__office_md_fs\/asset\?/)
+    await expect.poll(() => image.evaluate(
+      (element) => (element as HTMLImageElement).naturalWidth,
+    )).toBeGreaterThan(0)
+    await expect(page.locator('.file-row[data-file-kind="image"]', {
+      hasText: 'clipboard.svg',
+    })).toBeVisible()
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+  }
+})
+
+base('keeps an existing image and gives a pasted collision a unique name', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  const nested = path.join(workspace.directory, 'nested')
+  const existingContents = '<svg>keep this existing image</svg>'
+  await mkdir(nested)
+  await writeFile(path.join(nested, 'note.md'), 'before after\n')
+  await writeFile(path.join(nested, 'clipboard.svg'), existingContents)
+
+  try {
+    await openWorkspace(page, workspace.directory)
+    await page.locator('.file-select[title="Open nested/note.md"]').click()
+    const editor = page.locator('.ProseMirror')
+    await placeCaretInEditor(editor)
+
+    expect(await dispatchImagePaste(editor)).toBe(true)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(
+      /before\s*!\[clipboard-2\.svg\]\(clipboard-2\.svg\)\s*after/,
+    )
+    await expect.poll(() =>
+      readFile(path.join(nested, 'clipboard.svg'), 'utf8').catch(() => undefined),
+    ).toBe(existingContents)
+    await expect.poll(() =>
+      readFile(path.join(nested, 'clipboard-2.svg'), 'utf8').catch(() => undefined),
+    ).toBe(imageSvg)
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+  }
+})
+
+base('does not change Markdown when saving a pasted image fails', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  const nested = path.join(workspace.directory, 'nested')
+  await mkdir(nested)
+  await writeFile(path.join(nested, 'note.md'), 'before after\n')
+
+  try {
+    await openWorkspace(page, workspace.directory)
+    await page.locator('.file-select[title="Open nested/note.md"]').click()
+    const editor = page.locator('.ProseMirror')
+    await placeCaretInEditor(editor)
+    await page.route('**/__office_md_fs/write-image*', (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Simulated image write failure.' }),
+      }),
+    )
+
+    expect(await dispatchImagePaste(editor)).toBe(true)
+    await expect(page.locator('#save-status')).toHaveAttribute(
+      'title',
+      'Could not save the pasted image',
+    )
+    await expect(page.locator('#debug-markdown-content')).toHaveValue('before after\n')
+    await expect.poll(() =>
+      access(path.join(nested, 'clipboard.svg')).then(() => true).catch(() => false),
+    ).toBe(false)
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+  }
+})
+
+base('pastes ordinary clipboard text without treating it as an image', async ({ page }) => {
+  const workspace = await seedWorkspace()
+  const nested = path.join(workspace.directory, 'nested')
+  await mkdir(nested)
+  await writeFile(path.join(nested, 'note.md'), 'before after\n')
+
+  try {
+    await openWorkspace(page, workspace.directory)
+    await page.locator('.file-select[title="Open nested/note.md"]').click()
+    const editor = page.locator('.ProseMirror')
+    await placeCaretInEditor(editor)
+    const defaultPrevented = await editor.evaluate((element) => {
+      const transfer = new DataTransfer()
+      transfer.setData('text/plain', 'pasted ')
+      const event = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      })
+      element.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+
+    await expect.poll(() => page.locator('#debug-markdown-content').inputValue())
+      .toMatch(/before pasted\s*after/)
+    expect(defaultPrevented).toBe(true)
+  } finally {
+    await rm(workspace.directory, { recursive: true, force: true })
+  }
 })
 
 base('asks where to work before restoring the previous workspace', async ({ page }) => {

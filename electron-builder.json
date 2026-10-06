@@ -26,6 +26,7 @@
     "category": "Office"
   },
   "win": {
+    "icon": "build/office-md.ico",
     "target": [
       {
         "target": "nsis",

@@ -10,6 +10,7 @@ export const ELECTRON_WORKSPACE_CHANNELS = {
   readFile: 'workspace:read-file',
   readAssetUrl: 'workspace:read-asset-url',
   writeFile: 'workspace:write-file',
+  saveImageAsset: 'workspace:save-image-asset',
   renameFile: 'workspace:rename-file',
   createDirectory: 'workspace:create-directory',
   deleteFile: 'workspace:delete-file',
@@ -24,6 +25,12 @@ export type ElectronWorkspaceApi = {
   readFile: (workspaceId: string, name: string) => Promise<string>
   readAssetUrl: (workspaceId: string, name: string) => Promise<string | undefined>
   writeFile: (workspaceId: string, name: string, markdown: string) => Promise<void>
+  saveImageAsset: (
+    workspaceId: string,
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => Promise<string>
   renameFile: (workspaceId: string, oldName: string, newName: string) => Promise<void>
   createDirectory: (workspaceId: string, name: string) => Promise<void>
   deleteFile: (workspaceId: string, name: string) => Promise<void>

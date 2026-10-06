@@ -45,6 +45,19 @@ describe('WorkspaceApplication', () => {
       .toBe(changedCsv)
   })
 
+  it('adds a saved image to the workspace snapshot and keeps its bytes readable', async () => {
+    const application = createApplication()
+    await application.open()
+
+    const bytes = Uint8Array.from([1, 2, 3])
+    const name = await application.saveImageAsset('', 'pasted.png', bytes)
+
+    expect(name).toBe('pasted.png')
+    expect(application.file(name)).toEqual({ name, markdown: '' })
+    expect(application.state.files.map((file) => file.name)).toContain(name)
+    expect(await application.readAssetUrl(name)).toBe('data:image/png;base64,AQID')
+  })
+
   it('filters Open File to Markdown and CSV and opens a nested file from its parent workspace', async () => {
     const application = createWorkspaceApplication(createMemoryWorkspacePort({
       path: '/tmp/office-md-project',

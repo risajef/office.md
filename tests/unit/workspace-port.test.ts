@@ -46,6 +46,24 @@ describe('WorkspacePort', () => {
     await expect(port.readFile('drafts/plan.md')).rejects.toThrow('not found')
   })
 
+  it('saves image bytes in the requested folder and chooses a unique path on collision', async () => {
+    const port = createPort()
+    await port.open()
+    await port.createDirectory('assets')
+
+    const original = Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+    const pastedAgain = Uint8Array.from([0x47, 0x49, 0x46, 0x38])
+    const firstName = await port.saveImageAsset('assets', 'pasted.png', original)
+    const secondName = await port.saveImageAsset('assets', 'pasted.png', pastedAgain)
+
+    expect(firstName).toBe('assets/pasted.png')
+    expect(secondName).toBe('assets/pasted-2.png')
+    expect(await port.readAssetUrl(firstName)).toBe('data:image/png;base64,iVBORw==')
+    expect(await port.readAssetUrl(secondName)).toBe('data:image/png;base64,R0lGOA==')
+    expect((await port.reload()).files.map((file) => file.name)).toContain(firstName)
+    expect((await port.reload()).files.map((file) => file.name)).toContain(secondName)
+  })
+
   it('rejects unsafe paths and non-empty directory deletion', async () => {
     const port = createPort()
     await port.open()

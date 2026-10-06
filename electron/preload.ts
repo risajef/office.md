@@ -18,6 +18,7 @@ const channels = {
   readFile: 'workspace:read-file',
   readAssetUrl: 'workspace:read-asset-url',
   writeFile: 'workspace:write-file',
+  saveImageAsset: 'workspace:save-image-asset',
   renameFile: 'workspace:rename-file',
   createDirectory: 'workspace:create-directory',
   deleteFile: 'workspace:delete-file',
@@ -71,6 +72,10 @@ const workspace: ElectronWorkspaceApi = {
   writeFile: (workspaceId, name, markdown) => invoke<void>(
     channels.writeFile,
     { workspaceId, name, markdown },
+  ),
+  saveImageAsset: (workspaceId, directory, suggestedName, bytes) => invoke<string>(
+    channels.saveImageAsset,
+    { workspaceId, directory, suggestedName, bytes },
   ),
   renameFile: (workspaceId, oldName, newName) => invoke<void>(
     channels.renameFile,

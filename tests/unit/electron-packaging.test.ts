@@ -27,6 +27,7 @@ const builderConfig = JSON.parse(
   win?: {
     target?: Array<{ target?: string; arch?: string[] }>
     artifactName?: string
+    icon?: string
   }
   publish?: {
     provider?: string
@@ -50,6 +51,36 @@ describe('Electron packaging configuration', () => {
       .toBe('office.md-${version}-linux-x64.AppImage')
     expect(builderConfig.win?.artifactName)
       .toBe('office.md-${version}-windows-x64.exe')
+  })
+
+  it('assigns the Windows application a valid multi-resolution office.md icon', () => {
+    const iconPath = builderConfig.win?.icon
+    expect(iconPath).toBe('build/office-md.ico')
+    if (!iconPath) return
+
+    const icon = readFileSync(path.resolve(iconPath))
+    expect(icon.readUInt16LE(0)).toBe(0)
+    expect(icon.readUInt16LE(2)).toBe(1)
+    const imageCount = icon.readUInt16LE(4)
+    expect(imageCount).toBeGreaterThanOrEqual(6)
+
+    const dimensions = Array.from({ length: imageCount }, (_, index) => {
+      const entryOffset = 6 + index * 16
+      const width = icon[entryOffset] || 256
+      const height = icon[entryOffset + 1] || 256
+      const imageLength = icon.readUInt32LE(entryOffset + 8)
+      const imageOffset = icon.readUInt32LE(entryOffset + 12)
+      expect(imageOffset + imageLength).toBeLessThanOrEqual(icon.length)
+      return `${width}x${height}`
+    })
+    expect(dimensions).toEqual(expect.arrayContaining([
+      '16x16',
+      '32x32',
+      '48x48',
+      '64x64',
+      '128x128',
+      '256x256',
+    ]))
   })
 
   it('packages the production renderer and Electron entry point', () => {

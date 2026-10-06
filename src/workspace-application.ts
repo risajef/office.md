@@ -28,6 +28,11 @@ export type WorkspaceApplication = {
   readAssetUrl: (name: string) => Promise<string | undefined>
   file: (name: string) => WorkspaceFileSnapshot | undefined
   saveFile: (name: string, markdown: string) => Promise<void>
+  saveImageAsset: (
+    directory: string,
+    suggestedName: string,
+    bytes: Uint8Array,
+  ) => Promise<string>
   renameFile: (oldName: string, newName: string) => Promise<void>
   createDirectory: (name: string) => Promise<void>
   deleteFile: (name: string) => Promise<void>
@@ -138,6 +143,11 @@ export const createWorkspaceApplication = (
     async saveFile(name, markdown) {
       await port.writeFile(name, markdown)
       updateSnapshotFile(name, markdown)
+    },
+    async saveImageAsset(directory, suggestedName, bytes) {
+      const name = await port.saveImageAsset(directory, suggestedName, bytes)
+      updateSnapshotFile(name, '')
+      return name
     },
     async renameFile(oldName, newName) {
       await port.renameFile(oldName, newName)

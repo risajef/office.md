@@ -66,3 +66,8 @@ Each published package SHALL contain the production renderer and Electron deskto
 
 - **WHEN** a user runs the published x64 Windows installer and starts the installed application
 - **THEN** the office.md Electron application opens and provides its supported desktop workspace experience
+
+#### Scenario: An installed Windows application uses the office.md icon
+
+- **WHEN** a user installs the published x64 Windows package and views or launches office.md from the Windows shell
+- **THEN** the installed application and its Windows Start menu shortcut display the office.md icon
