@@ -7,12 +7,14 @@ import {
   createElectronUpdaterProvider,
   type ElectronUpdaterLike,
 } from '../../electron/updater-provider'
+import type { UpdateRelease } from '../../electron/update-types'
 
 class FakeUpdater implements ElectronUpdaterLike {
   autoDownload = true
   autoInstallOnAppQuit = true
   allowPrerelease = true
-  allowDowngrade = true
+  allowDowngrade = false
+  readonly setFeedURL = vi.fn<ElectronUpdaterLike['setFeedURL']>()
   readonly checkForUpdates = vi.fn<() => Promise<UpdateCheckResult | null>>()
   readonly downloadUpdate = vi.fn(async () => [])
   readonly quitAndInstall = vi.fn()
@@ -37,7 +39,7 @@ class FakeUpdater implements ElectronUpdaterLike {
   }
 }
 
-const updateResult = (version = '1.1.0'): UpdateCheckResult => ({
+const updateResult = (version = '0.9.0'): UpdateCheckResult => ({
   isUpdateAvailable: true,
   updateInfo: {
     version,
@@ -52,30 +54,45 @@ const updateResult = (version = '1.1.0'): UpdateCheckResult => ({
   versionInfo: undefined as never,
 })
 
-describe('electron-updater provider adapter', () => {
-  it('disables automatic download/install and maps a verified update', async () => {
+const selectedRelease: UpdateRelease = {
+  version: '0.9.0',
+  tag: 'v0.9.0',
+  platform: 'linux',
+  architecture: 'x64',
+}
+
+describe('Electron updater provider adapter', () => {
+  it('targets the selected tag and permits a verified downgrade', async () => {
     const updater = new FakeUpdater()
-    updater.checkForUpdates.mockResolvedValue(updateResult())
+    updater.checkForUpdates.mockImplementation(async () => {
+      expect(updater.allowDowngrade).toBe(true)
+      return updateResult()
+    })
     const provider = createElectronUpdaterProvider(updater, 'linux', 'x64')
 
     expect(updater.autoDownload).toBe(false)
     expect(updater.autoInstallOnAppQuit).toBe(false)
     expect(updater.allowPrerelease).toBe(false)
     expect(updater.allowDowngrade).toBe(false)
-    await expect(provider.check()).resolves.toEqual([{
-      version: '1.1.0',
-      platform: 'linux',
-      architecture: 'x64',
-      releaseDate: '2026-08-28T00:00:00.000Z',
-    }])
+
+    await provider.install(selectedRelease, () => undefined, () => undefined)
+
+    expect(updater.setFeedURL).toHaveBeenCalledWith({
+      provider: 'generic',
+      url: 'https://github.com/risajef/office.md/releases/download/v0.9.0/',
+    })
+    expect(updater.checkForUpdates).toHaveBeenCalledOnce()
+    expect(updater.downloadUpdate).toHaveBeenCalledOnce()
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, false)
+    expect(updater.allowDowngrade).toBe(false)
   })
 
-  it('translates download progress and controlled installation', async () => {
+  it('reports download progress and installation before restarting', async () => {
     const updater = new FakeUpdater()
     updater.checkForUpdates.mockResolvedValue(updateResult())
     const provider = createElectronUpdaterProvider(updater, 'linux', 'x64')
     const progress = []
-    const updates = await provider.check()
+    const phases: string[] = []
 
     updater.downloadUpdate.mockImplementation(async () => {
       updater.emitProgress({
@@ -87,8 +104,11 @@ describe('electron-updater provider adapter', () => {
       })
       return []
     })
-    await provider.download(updates[0], (value) => progress.push(value))
-    await provider.install()
+    await provider.install(
+      selectedRelease,
+      (value) => progress.push(value),
+      () => phases.push('installing'),
+    )
 
     expect(progress).toEqual([{
       percent: 40,
@@ -96,23 +116,51 @@ describe('electron-updater provider adapter', () => {
       totalBytes: 100,
       bytesPerSecond: 20,
     }])
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, false)
+    expect(phases).toEqual(['installing'])
+    expect(updater.quitAndInstall).toHaveBeenCalledOnce()
   })
 
-  it('rejects update metadata without the matching platform asset and hash', async () => {
+  it('rejects metadata that does not identify the exact selected version', async () => {
+    const updater = new FakeUpdater()
+    updater.checkForUpdates.mockResolvedValue(updateResult('1.1.0'))
+    const provider = createElectronUpdaterProvider(updater, 'linux', 'x64')
+
+    await expect(provider.install(selectedRelease, () => undefined, () => undefined))
+      .rejects.toThrow(/could not be verified/)
+    expect(updater.downloadUpdate).not.toHaveBeenCalled()
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('rejects update metadata without the selected platform asset and hash', async () => {
     const updater = new FakeUpdater()
     updater.checkForUpdates.mockResolvedValue({
       ...updateResult(),
       updateInfo: {
         ...updateResult().updateInfo,
         files: [{
-          url: 'office.md-1.1.0-linux-x64.AppImage',
+          url: 'office.md-0.9.0-linux-x64.AppImage',
           sha512: '',
         }],
       },
     })
     const provider = createElectronUpdaterProvider(updater, 'linux', 'x64')
 
-    await expect(provider.check()).rejects.toThrow(/matching linux x64 package/)
+    await expect(provider.install(selectedRelease, () => undefined, () => undefined))
+      .rejects.toThrow(/matching linux x64 package/)
+    expect(updater.downloadUpdate).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsafe release tags before configuring the updater', async () => {
+    const updater = new FakeUpdater()
+    const provider = createElectronUpdaterProvider(updater, 'linux', 'x64')
+
+    await expect(provider.install(
+      { ...selectedRelease, tag: 'v0.9.0/../latest' },
+      () => undefined,
+      () => undefined,
+    )).rejects.toThrow(/tag is invalid/)
+
+    expect(updater.setFeedURL).not.toHaveBeenCalled()
+    expect(updater.checkForUpdates).not.toHaveBeenCalled()
   })
 })

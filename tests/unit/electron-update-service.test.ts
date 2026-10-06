@@ -1,85 +1,47 @@
 import { describe, expect, it } from 'vitest'
 import {
-  createFakeUpdateProvider,
-  type UpdateState,
-} from '../../src/electron-update'
-import { createElectronUpdateService } from '../../electron/update-service'
+  getManualUpdateUnavailableReason,
+  isManualUpdateEnabled,
+  isSupportedUpdateTarget,
+} from '../../electron/update-availability'
 
-const release = {
-  version: '1.1.0',
-  platform: 'linux' as const,
-  architecture: 'x64' as const,
-}
-
-const createService = (options: {
-  isPackaged?: boolean
-  environment?: NodeJS.ProcessEnv
-  releases?: typeof release[]
-} = {}) => {
-  const fake = createFakeUpdateProvider({ releases: options.releases ?? [release] })
-  const service = createElectronUpdateService({
-    currentVersion: '1.0.0',
-    platform: 'linux',
-    architecture: 'x64',
-    isPackaged: options.isPackaged ?? true,
-    environment: options.environment ?? {},
-    provider: fake.provider,
-  })
-  return { service, fake }
-}
-
-describe('Electron update service', () => {
-  it('performs one non-blocking startup check and exposes the result', async () => {
-    const { service, fake } = createService()
-    const states: UpdateState[] = []
-    service.subscribe((state) => states.push(state))
-
-    await service.start()
-    await service.start()
-
-    expect(fake.calls.check).toBe(1)
-    expect(states.map((state) => state.status)).toEqual(['checking', 'available'])
-  })
-
-  it('allows a user-invoked manual check after startup', async () => {
-    const { service, fake } = createService({ releases: [] })
-
-    await service.start()
-    await service.check()
-
-    expect(fake.calls.check).toBe(2)
-    expect(service.getState()).toMatchObject({ status: 'up-to-date' })
-  })
-
-  it('keeps provider failures as observable retryable state instead of rejecting startup', async () => {
-    const fake = createFakeUpdateProvider({ checkError: new Error('offline') })
-    const service = createElectronUpdateService({
-      currentVersion: '1.0.0',
-      platform: 'linux',
-      architecture: 'x64',
-      isPackaged: true,
-      environment: {},
-      provider: fake.provider,
-    })
-
-    await expect(service.start()).resolves.toMatchObject({
-      status: 'error',
-      message: 'offline',
-      retryable: true,
-    })
-  })
-
+describe('manual Electron update availability', () => {
   it.each([
     ['unpackaged', false, {}],
     ['development server', true, { OFFICE_MD_DEV_SERVER_URL: 'http://127.0.0.1:4173' }],
-    ['automated test workspace', true, { OFFICE_MD_TEST_WORKSPACE: '/tmp/test-workspace' }],
-  ])('does not contact the provider in a %s session', async (_name, isPackaged, environment) => {
-    const { service, fake } = createService({ isPackaged, environment })
+    ['test workspace', true, { OFFICE_MD_TEST_WORKSPACE: '/tmp/workspace' }],
+    ['test mode', true, { OFFICE_MD_TEST_MODE: '1' }],
+    ['disabled by environment', true, { OFFICE_MD_DISABLE_UPDATES: '1' }],
+    ['Node test process', true, { NODE_ENV: 'test' }],
+  ])('disables update lookup in a %s session', (_name, isPackaged, environment) => {
+    expect(isManualUpdateEnabled({ isPackaged, environment })).toBe(false)
+  })
 
-    await service.start()
-    await service.check()
+  it('allows manual lookup in a packaged, non-test session', () => {
+    expect(isManualUpdateEnabled({
+      isPackaged: true,
+      environment: {},
+    })).toBe(true)
+  })
 
-    expect(fake.calls.check).toBe(0)
-    expect(service.getState()).toEqual({ status: 'disabled' })
+  it('supports installed x64 Linux AppImage releases', () => {
+    expect(isSupportedUpdateTarget('linux', 'x64')).toBe(true)
+    expect(isManualUpdateEnabled({
+      isPackaged: true,
+      environment: {},
+    })).toBe(true)
+  })
+
+  it('explains when a Linux development run cannot install an update', () => {
+    expect(getManualUpdateUnavailableReason({
+      isPackaged: false,
+      isSupportedTarget: isSupportedUpdateTarget('linux', 'x64'),
+      environment: {},
+    })).toMatch(/installed AppImage/)
+  })
+
+  it('does not enable unsupported architectures', () => {
+    expect(isSupportedUpdateTarget('linux', 'arm64')).toBe(false)
+    expect(isSupportedUpdateTarget('darwin', 'x64')).toBe(false)
   })
 })

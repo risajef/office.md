@@ -1,10 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronStyleFolderApi,
-  ElectronUpdateApi,
   ElectronWorkspaceApi,
 } from '../src/electron-api'
-import type { UpdateState } from '../src/electron-update'
 import type { StyleFolderSnapshot } from '../src/style-folder-port'
 import type { WorkspaceFileSelection, WorkspaceSnapshot } from '../src/workspace-port'
 
@@ -30,15 +28,6 @@ const styleFolderChannels = {
   restore: 'style-folder:restore',
   reload: 'style-folder:reload',
   readFile: 'style-folder:read-file',
-} as const
-
-const updateChannels = {
-  state: 'update:state',
-  getState: 'update:get-state',
-  check: 'update:check',
-  download: 'update:download',
-  install: 'update:install',
-  postpone: 'update:postpone',
 } as const
 
 const invoke = <Result>(channel: string, payload?: unknown) =>
@@ -108,22 +97,4 @@ const styleFolder: ElectronStyleFolderApi = {
   ),
 }
 
-const isUpdateState = (value: unknown): value is UpdateState =>
-  Boolean(value && typeof value === 'object' && 'status' in value)
-
-const updates: ElectronUpdateApi = {
-  getState: () => invoke<UpdateState>(updateChannels.getState),
-  check: () => invoke<UpdateState>(updateChannels.check),
-  download: () => invoke<UpdateState>(updateChannels.download),
-  install: () => invoke<UpdateState>(updateChannels.install),
-  postpone: () => invoke<UpdateState>(updateChannels.postpone),
-  subscribe: (listener) => {
-    const handleState = (_event: unknown, value: unknown) => {
-      if (isUpdateState(value)) listener(value)
-    }
-    ipcRenderer.on(updateChannels.state, handleState)
-    return () => ipcRenderer.removeListener(updateChannels.state, handleState)
-  },
-}
-
-contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder, updates })
+contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder })

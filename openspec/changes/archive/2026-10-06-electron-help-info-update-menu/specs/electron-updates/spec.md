@@ -1,10 +1,4 @@
-# electron-updates Specification
-
-## Purpose
-
-This capability lets packaged Electron users discover newer stable releases and update through a visible, user-controlled process without interrupting the current workspace.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Detect newer compatible stable releases
 
@@ -121,17 +115,3 @@ The update process SHALL verify that the selected release metadata and downloade
 
 - **WHEN** the selected release download is interrupted or fails
 - **THEN** the application keeps the current version runnable, does not modify workspace files, and allows a later retry
-
-### Requirement: Publish updater metadata with supported release packages
-
-The release process SHALL publish the platform-specific updater metadata required to discover and validate each supported x64 Linux AppImage and Windows NSIS package alongside the corresponding GitHub Release. Metadata and packages SHALL refer to the same stable application version.
-
-#### Scenario: A supported release is published
-
-- **WHEN** a stable release is published for the supported x64 Linux and Windows targets
-- **THEN** the GitHub Release contains each platform package and its matching updater metadata so a packaged application can discover that release
-
-#### Scenario: Package and metadata versions differ
-
-- **WHEN** updater metadata identifies a different application version than its package or release tag
-- **THEN** the release is rejected by the update process and is not offered for installation

@@ -124,19 +124,16 @@ test('Electron opens a selected Markdown file with its immediate parent workspac
   }
 })
 
-test('shows a deterministic update and keeps the workspace usable when postponed', async () => {
+test('shows Help information and update actions without a startup update notification', async () => {
   test.skip(!existsSync(electronPath), 'Electron binary is not installed.')
   test.skip(needsXvfb && !existsSync('/usr/bin/Xvfb'), 'Xvfb is not installed.')
 
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-update-e2e-'))
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-help-e2e-'))
   await writeRepresentativeWorkspace(workspace)
-  const originalDocument = await readFile(path.join(workspace, 'document.md'), 'utf8')
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
   environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
   environment.OFFICE_MD_TEST_WORKSPACE = workspace
-  environment.OFFICE_MD_TEST_UPDATE = 'available'
-  environment.OFFICE_MD_TEST_UPDATE_VERSION = '99.0.0'
   const virtualDisplay = needsXvfb ? await startXvfb() : undefined
   if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -149,16 +146,17 @@ test('shows a deterministic update and keeps the workspace usable when postponed
     })
     const page = application.windows()[0] ?? await application.firstWindow()
     await openTestWorkspace(page)
-    await expect(page.locator('#update-notification')).toBeVisible({ timeout: 30_000 })
-    await expect(page.locator('#update-message')).toContainText('99.0.0')
-
-    await page.locator('#update-postpone').click()
-    await expect(page.locator('#update-download')).toBeVisible()
-    await page.locator('#update-download').click()
-    await expect(page.locator('#update-install')).toBeVisible()
-    await page.locator('#update-postpone').click()
     await expect(page.locator('#editor')).toBeVisible()
-    expect(await readFile(path.join(workspace, 'document.md'), 'utf8')).toBe(originalDocument)
+    await expect(page.locator('#update-notification')).toHaveCount(0)
+    expect(await page.evaluate(() => Boolean(window.officeMd?.workspace))).toBe(true)
+    expect(await page.evaluate(() => 'updates' in (window.officeMd ?? {}))).toBe(false)
+
+    const helpActions = await application.evaluate(({ Menu }) => {
+      const helpMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === 'Help')
+      return helpMenu?.submenu?.items.map((item) => item.label)
+    })
+    expect(helpActions).toEqual(['Info', 'Update...'])
+    expect(application.windows()).toHaveLength(1)
   } finally {
     await application?.close()
     virtualDisplay?.process.kill()

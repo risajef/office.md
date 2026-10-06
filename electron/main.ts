@@ -1,25 +1,28 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { stat } from 'node:fs/promises'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { isEditableDocumentFile } from '../src/editable-files'
 import {
-  ELECTRON_UPDATE_CHANNELS,
   ELECTRON_STYLE_FOLDER_CHANNELS,
   ELECTRON_WORKSPACE_CHANNELS,
 } from '../src/electron-api'
 import {
-  createFakeUpdateProvider,
-  type UpdateArchitecture,
-  type UpdatePlatform,
-  type UpdateState,
-} from '../src/electron-update'
-import {
   createElectronWorkspaceService,
   type ElectronWorkspaceRequest,
 } from './workspace-service'
-import { createElectronUpdateService } from './update-service'
 import { createElectronUpdaterProvider } from './updater-provider'
+import { createGitHubReleaseCatalog } from './release-catalog'
+import { runManualUpdateFlow } from './manual-update-flow'
+import { createElectronUpdatePicker } from './update-picker-window'
+import {
+  getManualUpdateUnavailableReason,
+  isManualUpdateEnabled,
+  isSupportedUpdateTarget,
+} from './update-availability'
+import { createInfoAction } from './help-info'
+import { createHelpMenuTemplate } from './help-menu'
+import type { UpdateArchitecture, UpdatePlatform } from './update-types'
 import { createStyleFolderPreferenceStore, type StyleFolderPreferenceStore } from './style-folder-preferences'
 import {
   createElectronStyleFolderService,
@@ -34,32 +37,13 @@ let styleFolderPreferences: StyleFolderPreferenceStore | undefined
 
 const updatePlatform: UpdatePlatform = process.platform === 'win32' ? 'win32' : 'linux'
 const updateArchitecture: UpdateArchitecture = 'x64'
-const isSupportedUpdateTarget = (
-  process.platform === 'linux' || process.platform === 'win32'
-) && process.arch === 'x64'
-const testUpdateMode = Boolean(process.env.OFFICE_MD_TEST_UPDATE)
-const updateProvider = testUpdateMode
-  ? createFakeUpdateProvider({
-      releases: [{
-        version: process.env.OFFICE_MD_TEST_UPDATE_VERSION ?? '99.0.0',
-        platform: updatePlatform,
-        architecture: updateArchitecture,
-      }],
-    }).provider
-  : createElectronUpdaterProvider(
-      autoUpdater,
-      updatePlatform,
-      updateArchitecture,
-    )
-const updateService = createElectronUpdateService({
-  currentVersion: app.getVersion(),
-  platform: updatePlatform,
-  architecture: updateArchitecture,
-  isPackaged: isSupportedUpdateTarget && app.isPackaged,
-  environment: process.env,
-  provider: updateProvider,
-  allowTestUpdates: testUpdateMode,
-})
+const supportsUpdateTarget = isSupportedUpdateTarget(process.platform, process.arch)
+const updateCatalog = createGitHubReleaseCatalog()
+const updateProvider = createElectronUpdaterProvider(
+  autoUpdater,
+  updatePlatform,
+  updateArchitecture,
+)
 
 const recordPayload = (payload: unknown) => {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -229,16 +213,88 @@ const registerStyleFolderHandlers = () => {
   }
 }
 
-const registerUpdateHandlers = () => {
-  updateService.subscribe((state: UpdateState) => {
-    mainWindow?.webContents.send(ELECTRON_UPDATE_CHANNELS.state, state)
-  })
+const showMainMessageBox = (options: Electron.MessageBoxOptions) => mainWindow
+  ? dialog.showMessageBox(mainWindow, options)
+  : dialog.showMessageBox(options)
 
-  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.getState, () => updateService.getState())
-  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.check, () => updateService.check())
-  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.download, () => updateService.download())
-  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.install, () => updateService.install())
-  ipcMain.handle(ELECTRON_UPDATE_CHANNELS.postpone, () => updateService.postpone())
+const registerHelpMenu = () => {
+  const info = createInfoAction({
+    version: app.getVersion(),
+    showMessageBox: (options) => showMainMessageBox(options),
+    openExternal: (url) => shell.openExternal(url),
+  })
+  let updateFlowActive = false
+  const onUpdate = async () => {
+    if (updateFlowActive) return
+    updateFlowActive = true
+    const updateMenuItem = Menu.getApplicationMenu()?.getMenuItemById('office-md-help-update')
+    if (updateMenuItem) {
+      updateMenuItem.enabled = false
+      updateMenuItem.label = 'Update in progress…'
+    }
+    try {
+      await runManualUpdateFlow({
+        enabled: supportsUpdateTarget && isManualUpdateEnabled({
+          isPackaged: app.isPackaged,
+          environment: process.env,
+        }),
+        currentVersion: app.getVersion(),
+        platform: updatePlatform,
+        architecture: updateArchitecture,
+        catalog: updateCatalog,
+        openPicker: () => createElectronUpdatePicker(mainWindow),
+        confirm: async (release, isDowngrade) => {
+          const detail = isDowngrade
+            ? `Version ${release.version} is older than the installed version ${app.getVersion()}.`
+            : `The selected version will download and install, then office.md will restart.`
+          const result = await showMainMessageBox({
+            type: 'question',
+            title: 'Install office.md update?',
+            message: `Install version ${release.version}?`,
+            detail,
+            buttons: ['Install and restart', 'Cancel'],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+          })
+          return result.response === 0
+        },
+        updater: updateProvider,
+        showUnavailable: async () => {
+          await showMainMessageBox({
+            type: 'info',
+            title: 'Updates unavailable',
+            message: 'Updates are unavailable for this installation.',
+            detail: getManualUpdateUnavailableReason({
+              isPackaged: app.isPackaged,
+              isSupportedTarget: supportsUpdateTarget,
+              environment: process.env,
+            }),
+            buttons: ['Close'],
+            defaultId: 0,
+          })
+        },
+      })
+    } catch (error) {
+      await showMainMessageBox({
+        type: 'error',
+        title: 'Update failed',
+        message: error instanceof Error ? error.message : String(error),
+        buttons: ['Close'],
+        defaultId: 0,
+      })
+    } finally {
+      updateFlowActive = false
+      if (updateMenuItem) {
+        updateMenuItem.enabled = true
+        updateMenuItem.label = 'Update...'
+      }
+    }
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(createHelpMenuTemplate({
+    onInfo: () => { void info().catch((error) => console.error('Could not show application information.', error)) },
+    onUpdate: () => { void onUpdate() },
+  })))
 }
 
 const createWindow = async () => {
@@ -269,9 +325,8 @@ void app.whenReady().then(async () => {
   }
   registerWorkspaceHandlers()
   registerStyleFolderHandlers()
-  registerUpdateHandlers()
   await createWindow()
-  void updateService.start()
+  registerHelpMenu()
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()
   })

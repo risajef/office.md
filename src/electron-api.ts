@@ -1,5 +1,4 @@
 import type { WorkspaceFileSelection, WorkspaceSnapshot } from './workspace-port'
-import type { UpdateState } from './electron-update'
 import type { StyleFolderSnapshot } from './style-folder-port'
 
 export const ELECTRON_WORKSPACE_CHANNELS = {
@@ -51,30 +50,11 @@ export type ElectronStyleFolderApi = {
   readFile: (folderId: string, name: string) => Promise<string>
 }
 
-export const ELECTRON_UPDATE_CHANNELS = {
-  state: 'update:state',
-  getState: 'update:get-state',
-  check: 'update:check',
-  download: 'update:download',
-  install: 'update:install',
-  postpone: 'update:postpone',
-} as const
-
-export type ElectronUpdateApi = {
-  getState: () => Promise<UpdateState>
-  check: () => Promise<UpdateState>
-  download: () => Promise<UpdateState>
-  install: () => Promise<UpdateState>
-  postpone: () => Promise<UpdateState>
-  subscribe: (listener: (state: UpdateState) => void) => () => void
-}
-
 declare global {
     interface Window {
     officeMd?: {
       workspace?: ElectronWorkspaceApi
       styleFolder?: ElectronStyleFolderApi
-      updates?: ElectronUpdateApi
     }
   }
 }

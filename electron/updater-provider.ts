@@ -1,22 +1,21 @@
 import type {
   AppUpdater,
   ProgressInfo,
-  UpdateCheckResult,
   UpdateInfo,
 } from 'electron-updater'
 import type {
   UpdateArchitecture,
   UpdateDownloadProgress,
   UpdatePlatform,
-  UpdateProvider,
   UpdateRelease,
-} from '../src/electron-update'
+} from './update-types'
 
 export type ElectronUpdaterLike = {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
   allowPrerelease: boolean
   allowDowngrade: boolean
+  setFeedURL: AppUpdater['setFeedURL']
   checkForUpdates: AppUpdater['checkForUpdates']
   downloadUpdate: AppUpdater['downloadUpdate']
   quitAndInstall: AppUpdater['quitAndInstall']
@@ -57,21 +56,10 @@ const updateInfoHasExpectedArtifact = (
   })
 }
 
-const mapUpdate = (
-  info: UpdateInfo,
-  platform: UpdatePlatform,
-  architecture: UpdateArchitecture,
-): UpdateRelease => {
-  if (!updateInfoHasExpectedArtifact(info, platform, architecture)) {
-    throw new Error(
-      `Update ${info.version} has no matching ${platformLabel(platform)} ${architecture} package with an integrity hash.`,
-    )
-  }
-  return {
-    version: info.version,
-    platform,
-    architecture,
-    releaseDate: info.releaseDate,
+const ensureValidRelease = (release: UpdateRelease) => {
+  if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.tag) ||
+    release.tag !== `v${release.version}`) {
+    throw new Error('The selected update release tag is invalid.')
   }
 }
 
@@ -79,37 +67,62 @@ export const createElectronUpdaterProvider = (
   updater: ElectronUpdaterLike,
   platform: UpdatePlatform,
   architecture: UpdateArchitecture,
-): UpdateProvider => {
+) => {
   updater.autoDownload = false
   updater.autoInstallOnAppQuit = false
   updater.allowPrerelease = false
-  updater.allowDowngrade = false
 
   return {
-    check: async () => {
-      const result = await updater.checkForUpdates()
-      if (!result || !result.isUpdateAvailable) return []
-      return [mapUpdate(result.updateInfo, platform, architecture)]
-    },
-    download: async (_release, onProgress) => {
-      const handleProgress = (progress: ProgressInfo) => {
-        const value: UpdateDownloadProgress = {
-          percent: progress.percent,
-          transferredBytes: progress.transferred,
-          totalBytes: progress.total,
-          bytesPerSecond: progress.bytesPerSecond,
-        }
-        onProgress(value)
+    install: async (
+      release: UpdateRelease,
+      onProgress: (progress: UpdateDownloadProgress) => void,
+      onInstalling: () => void,
+    ) => {
+      ensureValidRelease(release)
+      if (release.platform !== platform || release.architecture !== architecture) {
+        throw new Error('The selected update release is incompatible with this application.')
       }
-      updater.on('download-progress', handleProgress)
+
+      const previousAllowDowngrade = updater.allowDowngrade
+      updater.allowDowngrade = true
       try {
-        await updater.downloadUpdate()
+        updater.setFeedURL({
+          provider: 'generic',
+          url: `https://github.com/risajef/office.md/releases/download/${release.tag}/`,
+        })
+        const result = await updater.checkForUpdates()
+        if (!result || result.updateInfo.version !== release.version) {
+          throw new Error(`Release ${release.version} could not be verified for installation.`)
+        }
+        if (!updateInfoHasExpectedArtifact(result.updateInfo, platform, architecture)) {
+          throw new Error(
+            `Update ${release.version} has no matching ${platformLabel(platform)} ${architecture} package with an integrity hash.`,
+          )
+        }
+        if (!result.isUpdateAvailable) {
+          throw new Error(`Release ${release.version} is not available for installation.`)
+        }
+
+        const handleProgress = (progress: ProgressInfo) => {
+          const value: UpdateDownloadProgress = {
+            percent: progress.percent,
+            transferredBytes: progress.transferred,
+            totalBytes: progress.total,
+            bytesPerSecond: progress.bytesPerSecond,
+          }
+          onProgress(value)
+        }
+        updater.on('download-progress', handleProgress)
+        try {
+          await updater.downloadUpdate()
+        } finally {
+          updater.removeListener('download-progress', handleProgress)
+        }
+        onInstalling()
+        updater.quitAndInstall(false, false)
       } finally {
-        updater.removeListener('download-progress', handleProgress)
+        updater.allowDowngrade = previousAllowDowngrade
       }
-    },
-    install: async () => {
-      updater.quitAndInstall(false, false)
     },
   }
 }
