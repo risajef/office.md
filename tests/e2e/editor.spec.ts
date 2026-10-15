@@ -639,86 +639,101 @@ base.describe('local filesystem bridge', () => {
 })
 
 test.describe('disk-backed editor workflows', () => {
-  test('uses an independent read-only style folder without changing the document workspace', async ({
+  test('shows files created outside office.md without a manual reload', async ({
     page,
     workspace,
   }) => {
-    const styles = await mkdtemp(path.join(tmpdir(), 'office-md-style-e2e-'))
-    const externalCss = `.editor-wrap .ProseMirror { color: rgb(191, 61, 61); }\n`
-    await writeFile(path.join(styles, 'external.css'), externalCss)
-    await writeFile(path.join(styles, 'readme.txt'), 'not a theme')
-    await mkdir(path.join(styles, 'nested'))
-    await writeFile(path.join(styles, 'nested', '.hidden.css'), 'hidden')
+    const activeDocument = await page.locator('#document-name').textContent()
+    await mkdir(workspace.file('external-folder'))
+    await writeFile(workspace.file('external-folder/external-note.md'), '# Added elsewhere\n')
 
-    try {
-      const sourceBefore = await page.locator('#debug-markdown-content').inputValue()
-      const documentNameBefore = await page.locator('#document-name').textContent()
-
-      await page.locator('#open-style-folder').click()
-      const dialog = page.locator('.folder-picker-dialog')
-      await expect(dialog).toBeVisible()
-      const pathInput = dialog.getByLabel('Folder path')
-      await pathInput.fill(styles)
-      await pathInput.press('Enter')
-      await expect(pathInput).toHaveValue(styles)
-      await dialog.getByRole('button', { name: 'Use this style folder' }).click()
-
-      await expect(page.locator('#style-folder-status')).toContainText('1 CSS themes')
-      await expect(page.locator('.style-theme-select[data-theme-origin="style-folder"]'))
-        .toHaveCount(1)
-      await expect(page.locator('#file-list')).not.toContainText('external.css')
-      await expect(page.locator('#document-name')).toHaveText(documentNameBefore as string)
-      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
-
-      await page.locator('.style-theme-select[data-theme-origin="style-folder"]').click()
-      await expect.poll(() => page.locator('style[data-theme-origin="style-folder"]').count())
-        .toBe(1)
-      const applied = await page.locator('style[data-theme-origin="style-folder"]').textContent()
-      expect(applied).toContain('rgb(191, 61, 61)')
-      const selectors = await page.locator('style[data-theme-origin="style-folder"]').evaluate(
-        (style) => Array.from(style.sheet?.cssRules ?? []).map((rule) => rule.cssText),
-      )
-      expect(selectors.join(' ')).toContain('.editor-wrap')
-
-      const downloadPromise = page.waitForEvent('download')
-      await page.locator('.editor-card [data-file-export]').click()
-      await page.getByRole('option', { name: 'HTML' }).click()
-      const download = await downloadPromise
-      const downloadedHtml = await readFile((await download.path()) as string, 'utf8')
-      expect(downloadedHtml).toContain('rgb(191, 61, 61)')
-      expect(downloadedHtml).not.toContain(styles)
-
-      await page.locator('.style-theme-select[data-theme-origin="workspace"]').click()
-      await expect(page.locator('style[data-theme-origin="workspace"]')).toHaveCount(1)
-      await expect(page.locator('style[data-theme-origin="style-folder"]')).toHaveCount(0)
-      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
-    } finally {
-      await rm(styles, { recursive: true, force: true })
-    }
+    await expect(page.locator('.file-select[title="Open external-folder/external-note.md"]'))
+      .toBeVisible({ timeout: 6_000 })
+    await expect(page.locator('.folder-label', { hasText: 'external-folder' })).toBeVisible()
+    await expect(page.locator('#document-name')).toHaveText(activeDocument as string)
   })
 
-  test('keeps editing available when an empty selected style folder disappears', async ({
+  test('loads changes to a clean active document and reports the external update', async ({
     page,
+    workspace,
   }) => {
-    const styles = await mkdtemp(path.join(tmpdir(), 'office-md-empty-style-e2e-'))
+    const external = '# Changed elsewhere\n\nFresh content from disk.'
+    await writeFile(workspace.file('document.md'), external)
+
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(`${external}\n`, {
+      timeout: 6_000,
+    })
+    await expect(page.locator('#save-status')).toHaveAttribute(
+      'aria-label',
+      /document.md.*updated externally/i,
+    )
+  })
+
+  test('keeps unsaved local content visible and offers per-document conflict choices', async ({
+    page,
+    workspace,
+  }) => {
+    const local = '# Local version\n\nKeep this edit.\n'
+    const disk = '# Disk version\n\nExternal edit.\n'
+    await editMarkdownSource(page, local)
+    await writeFile(workspace.file('document.md'), disk)
+
+    const conflict = page.locator('[data-workspace-conflict="document.md"]')
+    await expect(conflict).toBeVisible({ timeout: 6_000 })
+    await expect(conflict.getByRole('button', { name: 'Use disk version' })).toBeVisible()
+    await expect(conflict.getByRole('button', { name: 'Keep my version' })).toBeVisible()
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(`${local.trimEnd()}\n`)
+    await expect.poll(() => readFile(workspace.file('document.md'), 'utf8')).toBe(disk)
+
+    await conflict.getByRole('button', { name: 'Use disk version' }).click()
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(`${disk.trimEnd()}\n`)
+    await expect(conflict).toHaveCount(0)
+
+    const nextLocal = '# Keep this version\n\nWrite it explicitly.\n'
+    const nextDisk = '# New external version\n'
+    await editMarkdownSource(page, nextLocal)
+    await writeFile(workspace.file('document.md'), nextDisk)
+    const nextConflict = page.locator('[data-workspace-conflict="document.md"]')
+    await expect(nextConflict).toBeVisible({ timeout: 6_000 })
+    await nextConflict.getByRole('button', { name: 'Keep my version' }).click()
+    await expect.poll(() => readFile(workspace.file('document.md'), 'utf8'))
+      .toBe(nextLocal)
+    await expect(nextConflict).toHaveCount(0)
+  })
+
+  test('keeps bundled styles and workspace CSS separate without offering a web style-folder chooser', async ({
+    page,
+    workspace,
+  }) => {
     const sourceBefore = await page.locator('#debug-markdown-content').inputValue()
+    const documentNameBefore = await page.locator('#document-name').textContent()
 
-    try {
-      await page.locator('#open-style-folder').click()
-      const dialog = page.locator('.folder-picker-dialog')
-      await dialog.getByLabel('Folder path').fill(styles)
-      await dialog.getByLabel('Folder path').press('Enter')
-      await dialog.getByRole('button', { name: 'Use this style folder' }).click()
-      await expect(page.locator('#style-folder-status')).toContainText('No CSS themes found')
+    await expect(page.locator('#open-style-folder')).toHaveCount(0)
+    await expect(page.locator('.style-theme-select[data-theme-origin="bundled"]'))
+      .toHaveCount(6)
+    await expect(page.locator('.style-theme-select[data-theme-origin="workspace"]'))
+      .toHaveCount(1)
+    await expect(page.locator('#file-list')).toContainText('theme.css')
 
-      await rm(styles, { recursive: true, force: true })
-      await page.locator('.editor-card [data-project-action="reload"]').click()
-      await expect(page.locator('#style-folder-status')).toContainText('unavailable')
-      await expect(page.locator('.ProseMirror')).toBeVisible()
-      await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
-    } finally {
-      await rm(styles, { recursive: true, force: true })
-    }
+    await page.locator('.style-theme-select[data-theme-id="bundled-style:paper.css"]').click()
+    const bundledTheme = page.locator('style[data-theme-origin="bundled"]')
+    await expect.poll(() => bundledTheme.evaluate((style) => (
+      Array.from(style.sheet?.cssRules ?? []).map((rule) => rule.cssText).join(' ')
+    ))).toContain('.editor-wrap')
+
+    const downloadPromise = page.waitForEvent('download')
+    await page.locator('.editor-card [data-file-export]').click()
+    await page.getByRole('option', { name: 'HTML' }).click()
+    const download = await downloadPromise
+    const downloadedHtml = await readFile((await download.path()) as string, 'utf8')
+    expect(downloadedHtml).toContain('--page-bg: #f5f5f1')
+    expect(downloadedHtml).not.toContain('examples/styles')
+
+    await page.locator('.style-theme-select[data-theme-origin="workspace"]').click()
+    await expect(page.locator('style[data-theme-origin="workspace"]')).toHaveCount(1)
+    await expect(page.locator('style[data-theme-origin="bundled"]')).toHaveCount(0)
+    await expect(page.locator('#document-name')).toHaveText(documentNameBefore as string)
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(sourceBefore)
   })
 
   test('autosaves to disk, and Reload rereads disk', async ({

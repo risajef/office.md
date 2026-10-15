@@ -6,6 +6,10 @@ This glossary captures the terms used by office.md. It intentionally describes p
 
 A folder opened as a small document project. It contains visible Markdown, CSV, CSS, and image files plus visible folders. Generated, hidden, unsupported, and dependency content is outside the workspace view.
 
+## External workspace change
+
+A visible workspace file or folder added, modified, renamed, or removed on disk outside office.md while the workspace is open.
+
 ## Markdown document
 
 An editable document whose source uses Markdown and whose rendered form supports rich text, tables, code, LaTeX, Mermaid, images, and linked includes.
@@ -25,6 +29,10 @@ A Mermaid diagram that names a CSV data source. Cell references and supported ro
 ## Document style
 
 A CSS theme associated with the rendered document. It controls document presentation, including page, heading, code, and diagram typography, without changing the surrounding application interface.
+
+## Styles folder
+
+A directory of CSS files that office.md makes available as document styles, separate from the document workspace.
 
 ## Layout mode
 

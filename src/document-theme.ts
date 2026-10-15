@@ -2,7 +2,7 @@ export type DocumentThemeSource = {
   id: string
   name: string
   contents: string
-  origin: 'workspace' | 'style-folder' | 'example'
+  origin: 'workspace' | 'style-folder' | 'bundled' | 'example'
 }
 
 export const splitCssSelectors = (value: string) => {

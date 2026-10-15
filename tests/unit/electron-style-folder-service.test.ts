@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -46,5 +46,38 @@ describe('Electron style-folder service', () => {
     await expect(service.readFile(opened.folder.id, 'notes.txt'))
       .rejects.toThrow('invalid')
     await expect(readFile(path.join(root, 'paper.css'), 'utf8')).resolves.toBe('paper')
+  })
+
+  it('seeds missing shipped themes without overwriting custom or user-added files', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'office-md-managed-styles-'))
+    temporaryRoots.push(root)
+    const templates = path.join(root, 'templates')
+    const managed = path.join(root, 'user-data', 'styles')
+    await mkdir(templates)
+    await writeFile(path.join(templates, 'paper.css'), 'shipped paper', 'utf8')
+    await writeFile(path.join(templates, 'midnight.css'), 'shipped midnight', 'utf8')
+    const service = createElectronStyleFolderService()
+
+    const first = await service.openManaged(managed, templates)
+    expect(first.folder.path).toBe(managed)
+    expect(first.files.map((file) => file.name)).toEqual(['midnight.css', 'paper.css'])
+    await writeFile(path.join(managed, 'paper.css'), 'my edited paper', 'utf8')
+    await writeFile(path.join(managed, 'custom.css'), 'my new theme', 'utf8')
+    await writeFile(path.join(templates, 'rose.css'), 'newly shipped rose', 'utf8')
+
+    const second = await service.openManaged(managed, templates)
+
+    expect(second.files.map((file) => file.name)).toEqual([
+      'custom.css',
+      'midnight.css',
+      'paper.css',
+      'rose.css',
+    ])
+    await expect(readFile(path.join(managed, 'paper.css'), 'utf8'))
+      .resolves.toBe('my edited paper')
+    await expect(readFile(path.join(managed, 'custom.css'), 'utf8'))
+      .resolves.toBe('my new theme')
+    await expect(readFile(path.join(managed, 'rose.css'), 'utf8'))
+      .resolves.toBe('newly shipped rose')
   })
 })

@@ -37,6 +37,27 @@ describe('Electron workspace service', () => {
       .rejects.toThrow('Unknown workspace operation')
   })
 
+  it('rejects a stale write without replacing the current disk contents', async () => {
+    const root = await createFixture()
+    const service = createElectronWorkspaceService()
+    const opened = await service.dispatch({ operation: 'open', path: root })
+    await writeFile(path.join(root, 'notes.md'), '# Edited outside office.md\n', 'utf8')
+
+    const result = await service.dispatch({
+      operation: 'writeFile',
+      workspaceId: opened.workspace.id,
+      name: 'notes.md',
+      markdown: '# Local edit\n',
+    })
+    expect(result).toMatchObject({
+      status: 'conflict',
+      diskFileExists: true,
+      diskContents: '# Edited outside office.md\n',
+    })
+    await expect(readFile(path.join(root, 'notes.md'), 'utf8'))
+      .resolves.toBe('# Edited outside office.md\n')
+  })
+
   it('rejects unsafe paths before touching files', async () => {
     const root = await createFixture()
     const service = createElectronWorkspaceService()

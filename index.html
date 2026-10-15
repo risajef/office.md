@@ -307,6 +307,7 @@
                 <button class="folder-button" id="open-folder" type="button">Open folder</button>
               </div>
               <p class="folder-status" id="folder-status">Browser-local files</p>
+              <div class="workspace-conflicts" id="workspace-conflicts" aria-live="polite" hidden></div>
               <ul class="file-list" id="file-list"></ul>
             </section>
 
@@ -314,13 +315,9 @@
               <div class="sidebar-heading">
                 <h2>Styles</h2>
               </div>
-              <div class="folder-actions">
-                <button class="folder-button" id="open-style-folder" type="button">
-                  Select style folder
-                </button>
-              </div>
+              <div class="folder-actions" id="style-folder-actions"></div>
               <p class="folder-status style-folder-status" id="style-folder-status">
-                No independent style folder selected
+                Bundled styles
               </p>
               <ul class="style-theme-list" id="style-theme-list" aria-label="Document themes"></ul>
             </section>

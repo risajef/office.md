@@ -1785,6 +1785,51 @@ h1 em {
   white-space: nowrap;
 }
 
+.workspace-conflicts:not([hidden]) {
+  display: grid;
+  gap: 7px;
+  margin: 8px;
+}
+
+.workspace-conflict {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, #c87934 42%, var(--line));
+  border-radius: 6px;
+  color: var(--ink);
+  background: color-mix(in srgb, #f5bd72 12%, var(--paper));
+  font-size: 10px;
+}
+
+.workspace-conflict p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.workspace-conflict-actions button {
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-conflict-actions button:hover,
+.workspace-conflict-actions button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
 .styles-section {
   border-top: 1px solid var(--line);
 }

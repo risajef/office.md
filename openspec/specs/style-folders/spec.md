@@ -6,78 +6,87 @@ Provide a reusable, independently selected source of CSS document themes that re
 
 ## Requirements
 
-### Requirement: Select an independent style folder
-
-The system SHALL let the user select one style folder independently from the opened document workspace and SHALL discover its visible CSS files as available document themes.
-
-#### Scenario: A style folder is selected while a workspace is open
-
-- **WHEN** the user selects a valid style folder while a document workspace is open
-- **THEN** the folder's visible CSS files appear in the style-theme choices and the current document workspace, open file, and document source remain unchanged
-
-#### Scenario: A style folder contains mixed and nested content
-
-- **WHEN** the selected style folder contains visible CSS files in nested folders alongside non-CSS files and hidden paths
-- **THEN** only the visible CSS files are listed with their relative paths and unsupported or hidden content is ignored
-
-#### Scenario: A style folder contains no usable CSS files
-
-- **WHEN** the user selects a folder that contains no visible CSS files
-- **THEN** the style choices show an explicit empty state and the opened document workspace remains usable
-
-#### Scenario: Style-folder selection is cancelled or rejected
-
-- **WHEN** the user cancels selection or the requested folder cannot be read
-- **THEN** the current style source and document workspace remain unchanged and the user receives an actionable status message
-
 ### Requirement: Keep the style folder separate from the document workspace
 
-The system SHALL treat CSS files from the selected style folder as read-only theme sources and SHALL not expose them as document-workspace files, Markdown include sources, or targets of workspace create, rename, delete, or save operations.
+The system SHALL keep CSS from the styles folder separate from the document workspace, include sources, and workspace mutations. The application SHALL read these files as document-theme sources and SHALL NOT edit them through document-workspace actions. In Electron, users may edit the app-managed styles folder outside office.md.
 
 #### Scenario: An external CSS file is available as a theme
 
-- **WHEN** a visible CSS file is discovered in the selected style folder
+- **WHEN** a visible CSS file is discovered in the app-provided style library
 - **THEN** the user can apply it as a document theme while it remains absent from the document workspace file view
 
 #### Scenario: A workspace operation targets an external CSS file
 
-- **WHEN** the user performs a document-workspace save or mutation after selecting an external style folder
-- **THEN** the operation affects only the opened document workspace and leaves the external CSS file unchanged
+- **WHEN** the user performs a document-workspace save or mutation after the app-provided styles are loaded
+- **THEN** the operation affects only the opened document workspace and leaves the styles folder unchanged
 
 #### Scenario: The style source is switched
 
-- **WHEN** the user selects a different style folder or chooses a workspace CSS theme after using an external theme
-- **THEN** the previous external theme is no longer active and the newly selected source is applied without changing the document source
+- **WHEN** the user selects a workspace CSS theme after using a style-library theme, or selects a style-library theme after using a workspace CSS theme
+- **THEN** the newly chosen theme is applied without changing the document source or removing themes from either source
 
 ### Requirement: Handle an unavailable style folder
 
-The system SHALL report when the selected style folder or an active external CSS file is no longer readable, remove unavailable external choices, and keep the document workspace available for editing.
+The system SHALL keep the document workspace usable if the Electron app-managed styles folder is unavailable. It SHALL retain the bundled themes as a read-only fallback and report that the managed folder could not be opened. When an active style-library CSS file becomes unavailable, the system SHALL remove it from the rendered document and return to the normal document styling or a currently selected workspace theme.
 
 #### Scenario: The selected style folder is removed
 
-- **WHEN** the selected style folder no longer exists or becomes inaccessible during a reload or style operation
-- **THEN** the application clears the unavailable external choices, reports that the style folder must be selected again, and does not discard document edits
+- **WHEN** the Electron app-managed styles folder no longer exists or cannot be read during startup or refresh
+- **THEN** the document workspace remains usable, bundled read-only themes remain available, and the user receives an actionable status message
 
 #### Scenario: The active external theme is removed
 
-- **WHEN** the active external CSS file is no longer available
-- **THEN** the application removes that theme from the rendered document and returns to the normal document styling or another currently selected workspace theme
+- **WHEN** the active CSS file is removed from the Electron styles folder and the application refreshes the folder
+- **THEN** the theme is removed from the style choices and rendered document, and the application returns to normal document styling or another currently selected workspace theme
 
-### Requirement: Remember the last style-folder location in Electron
+#### Scenario: A styles-folder refresh fails
 
-The Electron target SHALL remember the last successfully selected style-folder location and SHALL attempt to restore it on the next application launch.
+- **WHEN** the Electron app cannot read its managed styles folder while refreshing it
+- **THEN** the last known theme choices and document styling remain available, the user receives a status message, and the application retries when office.md next regains focus
 
-#### Scenario: The last style folder is restored
+### Requirement: Provide the developed styles in production builds
 
-- **WHEN** the user has selected a readable style folder in Electron and starts Electron again
-- **THEN** the application restores that folder, discovers its visible CSS files, and makes them available without requiring selection again
+Production builds SHALL include the developed CSS themes as a style library that remains available independently of the opened document workspace. The hosted web build SHALL expose the bundled styles as read-only themes and SHALL NOT offer a control to select or open a style folder.
 
-#### Scenario: The remembered style folder is unavailable
+#### Scenario: The user opens a document workspace
 
-- **WHEN** the remembered location no longer exists or cannot be read at Electron startup
-- **THEN** the application clears the unusable remembered location, keeps the editor usable, and prompts the user to select a style folder again
+- **WHEN** the user opens a document workspace in a production web or Electron build
+- **THEN** the developed styles remain available in the Styles section alongside any CSS themes from the workspace
 
-#### Scenario: A new Electron selection replaces the remembered location
+#### Scenario: The user views styles in the hosted web build
 
-- **WHEN** the user successfully selects a different style folder in Electron
-- **THEN** the new location becomes the one attempted on the next launch
+- **WHEN** the hosted web build displays the Styles section
+- **THEN** the bundled developed styles are available to apply, and no style-folder selection or file-manager action is offered
+
+### Requirement: Use an app-managed Electron styles folder
+
+The Electron target SHALL create and automatically select a writable styles folder under app-managed user data. It SHALL initialize the folder with shipped CSS files without overwriting existing files, and SHALL add any shipped CSS files missing from the folder when the app starts. The Styles section SHALL offer an action to open this folder in the system file manager and SHALL NOT offer a style-folder chooser.
+
+#### Scenario: Electron starts without an app-managed styles folder
+
+- **WHEN** the user launches Electron for the first time
+- **THEN** the app creates the styles folder, copies in the shipped CSS files, and makes those files available without asking the user to select a folder
+
+#### Scenario: Electron starts with an existing styles folder
+
+- **WHEN** the user launches Electron after editing or adding CSS files in the app-managed folder
+- **THEN** existing files and user-added files are preserved, missing shipped CSS files are added without overwriting existing files, and the folder is automatically selected
+
+#### Scenario: The user opens the Electron styles folder
+
+- **WHEN** the user activates the Styles section's open-folder action
+- **THEN** the system file manager opens the app-managed styles folder
+
+### Requirement: Refresh Electron themes when the app regains focus
+
+The Electron target SHALL refresh the app-managed styles folder when its window regains focus. New or modified visible CSS files SHALL update the style choices, changes to the active CSS file SHALL update the rendered document theme, and removed files SHALL be removed from the style choices.
+
+#### Scenario: The user adds or changes CSS outside office.md
+
+- **WHEN** the user adds a visible CSS file or edits an existing file in the app-managed folder while office.md is unfocused, then returns to office.md
+- **THEN** the new or changed theme is available, and an active theme reflects its latest CSS contents
+
+#### Scenario: The active CSS file is removed outside office.md
+
+- **WHEN** the user removes the active CSS file while office.md is unfocused, then returns to office.md
+- **THEN** the removed theme is no longer available and the rendered document returns to normal styling or a currently selected workspace theme

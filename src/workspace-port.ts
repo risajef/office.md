@@ -21,6 +21,38 @@ export type WorkspaceSnapshot = {
   directories: string[]
 }
 
+export type WorkspaceWriteResult =
+  | { status: 'saved' }
+  | {
+      status: 'conflict'
+      diskFileExists: boolean
+      diskContents?: string
+    }
+
+export class WorkspaceFileConflictError extends Error {
+  constructor(
+    readonly fileName: string,
+    readonly diskFileExists: boolean,
+    readonly diskContents?: string,
+  ) {
+    super(`The file ${fileName} changed outside office.md.`)
+    this.name = 'WorkspaceFileConflictError'
+  }
+}
+
+export const throwOnWorkspaceWriteConflict = (
+  fileName: string,
+  result: WorkspaceWriteResult | void,
+) => {
+  if (result?.status === 'conflict') {
+    throw new WorkspaceFileConflictError(
+      fileName,
+      result.diskFileExists,
+      result.diskContents,
+    )
+  }
+}
+
 export type WorkspaceFileSelection = {
   snapshot: WorkspaceSnapshot
   fileName: string
@@ -38,6 +70,7 @@ export type WorkspaceBackend = {
   open: () => Promise<WorkspaceSnapshot | undefined>
   openFile?: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
+  refresh?: () => Promise<WorkspaceSnapshot>
   reload: () => Promise<WorkspaceSnapshot>
   readFile: (name: string) => Promise<string>
   readAssetUrl: (name: string) => Promise<string | undefined>
@@ -59,6 +92,7 @@ export type WorkspacePort = {
   open: () => Promise<WorkspaceSnapshot | undefined>
   openFile: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
+  refresh: () => Promise<WorkspaceSnapshot>
   reload: () => Promise<WorkspaceSnapshot>
   readFile: (name: string) => Promise<string>
   readAssetUrl: (name: string) => Promise<string | undefined>
@@ -147,6 +181,13 @@ export const createBackendWorkspacePort = (
     async reload() {
       const backend = requireBackend()
       return setActiveBackend(backend, await backend.reload())
+    },
+    async refresh() {
+      const backend = requireBackend()
+      return setActiveBackend(
+        backend,
+        await (backend.refresh ? backend.refresh() : backend.reload()),
+      )
     },
     readFile: (name) => requireBackend().readFile(name),
     readAssetUrl: (name) => requireBackend().readAssetUrl(name),
@@ -328,6 +369,10 @@ export const createMemoryWorkspacePort = (
       return snapshot()
     },
     async reload() {
+      requireOpen()
+      return snapshot()
+    },
+    async refresh() {
       requireOpen()
       return snapshot()
     },

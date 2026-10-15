@@ -1,3 +1,5 @@
+import type { WorkspaceWriteResult } from './workspace-port'
+
 const API_ROOT = '/__office_md_fs'
 
 export type LocalServerFile = {
@@ -111,7 +113,7 @@ export const writeLocalServerFile = (
   workspaceId: string,
   name: string,
   markdown: string,
-) => post<{ ok: true }>('write', { workspaceId, name, markdown })
+) => post<WorkspaceWriteResult>('write', { workspaceId, name, markdown })
 
 export const writeLocalServerImage = async (
   workspaceId: string,

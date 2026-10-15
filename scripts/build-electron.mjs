@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,6 +18,9 @@ const run = (command, args) => {
 
 run(executable('tsc'), ['-p', 'tsconfig.electron.json'])
 await mkdir(path.join(projectRoot, 'dist-electron'), { recursive: true })
+const styleTemplates = path.join(projectRoot, 'dist-electron', 'styles')
+await rm(styleTemplates, { recursive: true, force: true })
+await cp(path.join(projectRoot, 'examples', 'styles'), styleTemplates, { recursive: true })
 await writeFile(
   path.join(projectRoot, 'dist-electron', 'package.json'),
   '{"type":"commonjs"}\n',

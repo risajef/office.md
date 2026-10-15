@@ -1,4 +1,8 @@
-import type { WorkspaceFileSelection, WorkspaceSnapshot } from './workspace-port'
+import type {
+  WorkspaceFileSelection,
+  WorkspaceSnapshot,
+  WorkspaceWriteResult,
+} from './workspace-port'
 import type { StyleFolderSnapshot } from './style-folder-port'
 
 export const ELECTRON_WORKSPACE_CHANNELS = {
@@ -23,7 +27,7 @@ export type ElectronWorkspaceApi = {
   reload: (workspaceId: string) => Promise<WorkspaceSnapshot>
   readFile: (workspaceId: string, name: string) => Promise<string>
   readAssetUrl: (workspaceId: string, name: string) => Promise<string | undefined>
-  writeFile: (workspaceId: string, name: string, markdown: string) => Promise<void>
+  writeFile: (workspaceId: string, name: string, markdown: string) => Promise<WorkspaceWriteResult | void>
   saveImageAsset: (
     workspaceId: string,
     directory: string,
@@ -37,17 +41,17 @@ export type ElectronWorkspaceApi = {
 }
 
 export const ELECTRON_STYLE_FOLDER_CHANNELS = {
-  open: 'style-folder:open',
   restore: 'style-folder:restore',
   reload: 'style-folder:reload',
   readFile: 'style-folder:read-file',
+  openFolder: 'style-folder:open-folder',
 } as const
 
 export type ElectronStyleFolderApi = {
-  open: () => Promise<StyleFolderSnapshot | undefined>
   restore: () => Promise<StyleFolderSnapshot | undefined>
   reload: (folderId: string) => Promise<StyleFolderSnapshot>
   readFile: (folderId: string, name: string) => Promise<string>
+  openFolder: () => Promise<void>
 }
 
 declare global {

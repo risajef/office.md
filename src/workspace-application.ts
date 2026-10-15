@@ -24,6 +24,7 @@ export type WorkspaceApplication = {
   open: () => Promise<WorkspaceSnapshot | undefined>
   openFile: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>
+  refresh: () => Promise<WorkspaceSnapshot>
   reload: () => Promise<WorkspaceSnapshot>
   readAssetUrl: (name: string) => Promise<string | undefined>
   file: (name: string) => WorkspaceFileSnapshot | undefined
@@ -134,6 +135,9 @@ export const createWorkspaceApplication = (
     },
     async reload() {
       return setSnapshot(await port.reload())
+    },
+    async refresh() {
+      return setSnapshot(await port.refresh())
     },
     readAssetUrl: (name) => port.readAssetUrl(name),
     file(name) {

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { isEditableDocumentFile } from '../src/editable-files'
@@ -23,7 +23,7 @@ import {
 import { createInfoAction } from './help-info'
 import { createHelpMenuTemplate } from './help-menu'
 import type { UpdateArchitecture, UpdatePlatform } from './update-types'
-import { createStyleFolderPreferenceStore, type StyleFolderPreferenceStore } from './style-folder-preferences'
+import { createOpenManagedStyleFolderHandler } from './open-managed-style-folder'
 import {
   createElectronStyleFolderService,
   type ElectronStyleFolderRequest,
@@ -33,7 +33,6 @@ const service = createElectronWorkspaceService()
 const styleFolderService = createElectronStyleFolderService()
 let mainWindow: BrowserWindow | undefined
 let lastWorkspacePath: string | undefined
-let styleFolderPreferences: StyleFolderPreferenceStore | undefined
 
 const updatePlatform: UpdatePlatform = process.platform === 'win32' ? 'win32' : 'linux'
 const updateArchitecture: UpdateArchitecture = 'x64'
@@ -157,46 +156,28 @@ const registerWorkspaceHandlers = () => {
 }
 
 const registerStyleFolderHandlers = () => {
-  if (!styleFolderPreferences) {
-    styleFolderPreferences = createStyleFolderPreferenceStore(
-      path.join(app.getPath('userData'), 'style-folder.json'),
-    )
-  }
-
-  ipcMain.handle(ELECTRON_STYLE_FOLDER_CHANNELS.open, async () => {
-    const testFolderPath = process.env.OFFICE_MD_TEST_STYLE_FOLDER
-    if (testFolderPath) {
-      const snapshot = await styleFolderService.open(testFolderPath)
-      await styleFolderPreferences?.remember(snapshot.folder.path)
-      return snapshot
-    }
-    if (!mainWindow) throw new Error('The Electron window is not ready.')
-    const selection = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    const selectedPath = selection.filePaths[0]
-    if (selection.canceled || !selectedPath) return undefined
-    const snapshot = await styleFolderService.open(selectedPath)
-    try {
-      await styleFolderPreferences?.remember(snapshot.folder.path)
-    } catch (error) {
-      console.warn('Could not remember the selected style folder.', error)
-    }
-    return snapshot
-  })
-
   ipcMain.handle(ELECTRON_STYLE_FOLDER_CHANNELS.restore, async () => {
-    const rememberedPath = await styleFolderPreferences?.load()
-    if (!rememberedPath) return undefined
-    try {
-      const snapshot = await styleFolderService.restore(rememberedPath)
-      if (snapshot) return snapshot
-    } catch {
-      // The folder may have moved or become inaccessible between launches.
-    }
-    await styleFolderPreferences?.clear().catch(() => undefined)
-    return undefined
+    const managedPath = path.join(app.getPath('userData'), 'styles')
+    const templatesPath = path.join(app.getAppPath(), 'dist-electron', 'styles')
+    return styleFolderService.openManaged(managedPath, templatesPath)
   })
+
+  ipcMain.handle(
+    ELECTRON_STYLE_FOLDER_CHANNELS.openFolder,
+    createOpenManagedStyleFolderHandler(
+      {
+        openPath: async (managedPath) => {
+          const testLogPath = process.env.OFFICE_MD_TEST_STYLE_FOLDER_OPEN_LOG
+          if (testLogPath) {
+            await writeFile(testLogPath, managedPath, 'utf8')
+            return ''
+          }
+          return shell.openPath(managedPath)
+        },
+      },
+      () => path.join(app.getPath('userData'), 'styles'),
+    ),
+  )
 
   const operations = [
     ['reload', ELECTRON_STYLE_FOLDER_CHANNELS.reload],

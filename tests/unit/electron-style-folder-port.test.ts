@@ -13,10 +13,10 @@ const snapshot = (name = 'desktop-styles'): StyleFolderSnapshot => ({
 })
 
 const createApi = (): ElectronStyleFolderApi => ({
-  open: vi.fn(async () => snapshot()),
   restore: vi.fn(async () => snapshot()),
   reload: vi.fn(async () => snapshot('reloaded-styles')),
   readFile: vi.fn(async () => 'theme'),
+  openFolder: vi.fn(async () => undefined),
 })
 
 describe('Electron style-folder port', () => {
@@ -34,6 +34,8 @@ describe('Electron style-folder port', () => {
     }))
     expect(api.readFile).toHaveBeenCalledWith('desktop-style-folder-id', 'theme.css')
     expect(api.reload).toHaveBeenCalledWith('desktop-style-folder-id')
+    await port.openFolder()
+    expect(api.openFolder).toHaveBeenCalledOnce()
   })
 
   it('reports an unavailable preload bridge without falling back to web access', async () => {

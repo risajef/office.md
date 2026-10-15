@@ -2,6 +2,7 @@ import {
   createBackendWorkspacePort,
   type WorkspaceBackend,
   type WorkspacePort,
+  throwOnWorkspaceWriteConflict,
 } from './workspace-port'
 import type { ElectronWorkspaceApi } from './electron-api'
 
@@ -116,15 +117,21 @@ export const createElectronWorkspacePort = (
     reload: () => withWorkspace((id) => api?.reload(id) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
+    refresh: () => withWorkspace((id) => api?.reload(id) ?? Promise.reject(
+      new Error('The Electron workspace bridge is unavailable.'),
+    )),
     readFile: (name) => withWorkspace((id) => api?.readFile(id, name) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
     readAssetUrl: (name) => withWorkspace((id) => api?.readAssetUrl(id, name) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
-    writeFile: (name, markdown) => withWorkspace((id) => api?.writeFile(id, name, markdown) ?? Promise.reject(
-      new Error('The Electron workspace bridge is unavailable.'),
-    )),
+    writeFile: async (name, markdown) => {
+      const result = await withWorkspace((id) => api?.writeFile(id, name, markdown) ?? Promise.reject(
+        new Error('The Electron workspace bridge is unavailable.'),
+      ))
+      throwOnWorkspaceWriteConflict(name, result)
+    },
     saveImageAsset: (directory, suggestedName, bytes) => withWorkspace((id) =>
       api?.saveImageAsset(id, directory, suggestedName, bytes) ?? Promise.reject(
         new Error('The Electron workspace bridge is unavailable.'),

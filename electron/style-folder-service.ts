@@ -27,6 +27,7 @@ export type ElectronStyleFolderResponse =
 export type ElectronStyleFolderService = {
   open: (rootPath: string) => Promise<StyleFolderSnapshot>
   restore: (rootPath?: string) => Promise<StyleFolderSnapshot | undefined>
+  openManaged: (rootPath: string, templatesPath: string) => Promise<StyleFolderSnapshot>
   reload: (folderId: string) => Promise<StyleFolderSnapshot>
   readFile: (folderId: string, name: string) => Promise<string>
   dispatch: {
@@ -80,6 +81,34 @@ const pathIsInside = (root: string, target: string) => {
     !path.isAbsolute(relative)
 }
 
+const seedMissingStyleFiles = async (root: string, templatesPath: string) => {
+  const templates = await readStyleFiles(templatesPath)
+  for (const template of templates) {
+    const relativeName = normalizeStyleFilePath(template.name)
+    const target = path.resolve(root, relativeName)
+    if (!pathIsInside(root, target)) {
+      throw new Error('The shipped style path must stay inside its folder.')
+    }
+    const parent = path.dirname(target)
+    await fs.mkdir(parent, { recursive: true })
+    const resolvedParent = await fs.realpath(parent)
+    const resolvedTarget = path.join(resolvedParent, path.basename(target))
+    if (!pathIsInside(root, resolvedTarget)) {
+      throw new Error('The shipped style path must stay inside its folder.')
+    }
+    try {
+      await fs.writeFile(resolvedTarget, template.contents, {
+        encoding: 'utf8',
+        flag: 'wx',
+      })
+    } catch (error) {
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') {
+        throw error
+      }
+    }
+  }
+}
+
 const resolveStyleTarget = async (root: string, name: string) => {
   const normalized = normalizeStyleFilePath(name)
   const target = path.resolve(root, normalized)
@@ -125,6 +154,15 @@ export const createElectronStyleFolderService = (): ElectronStyleFolderService =
     return open(rootPath)
   }
 
+  const openManaged = async (rootPath: string, templatesPath: string) => {
+    if (!rootPath.trim()) throw new Error('The managed styles path is invalid.')
+    const requestedRoot = path.resolve(rootPath)
+    await fs.mkdir(requestedRoot, { recursive: true })
+    const root = await fs.realpath(requestedRoot)
+    await seedMissingStyleFiles(root, templatesPath)
+    return open(root)
+  }
+
   const reload = async (folderId: string) =>
     createSnapshot(requireFolder(folderId))
 
@@ -163,5 +201,5 @@ export const createElectronStyleFolderService = (): ElectronStyleFolderService =
     }
   }
 
-  return { open, restore, reload, readFile, dispatch }
+  return { open, restore, openManaged, reload, readFile, dispatch }
 }

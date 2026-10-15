@@ -16,6 +16,7 @@ export type StyleFolderApplication = {
   restore: () => Promise<StyleFolderSnapshot | undefined>
   reload: () => Promise<StyleFolderSnapshot>
   readFile: (name: string) => Promise<string>
+  openFolder: () => Promise<void>
   file: (name: string) => StyleFileSnapshot | undefined
   clear: () => void
 }
@@ -70,6 +71,7 @@ export const createStyleFolderApplication = (
       return setSnapshot(await port.reload())
     },
     readFile: (name) => port.readFile(name),
+    openFolder: () => port.openFolder(),
     file(name) {
       const file = findFile(currentSnapshot, name)
       return file ? { ...file } : undefined

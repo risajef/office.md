@@ -4,7 +4,11 @@ import type {
   ElectronWorkspaceApi,
 } from '../src/electron-api'
 import type { StyleFolderSnapshot } from '../src/style-folder-port'
-import type { WorkspaceFileSelection, WorkspaceSnapshot } from '../src/workspace-port'
+import type {
+  WorkspaceFileSelection,
+  WorkspaceSnapshot,
+  WorkspaceWriteResult,
+} from '../src/workspace-port'
 
 // Keep the sandboxed preload self-contained: it may require Electron's
 // built-in modules, but it must not load arbitrary application modules.
@@ -24,10 +28,10 @@ const channels = {
 } as const
 
 const styleFolderChannels = {
-  open: 'style-folder:open',
   restore: 'style-folder:restore',
   reload: 'style-folder:reload',
   readFile: 'style-folder:read-file',
+  openFolder: 'style-folder:open-folder',
 } as const
 
 const invoke = <Result>(channel: string, payload?: unknown) =>
@@ -58,7 +62,7 @@ const workspace: ElectronWorkspaceApi = {
     )
     return typeof response?.dataUrl === 'string' ? response.dataUrl : undefined
   },
-  writeFile: (workspaceId, name, markdown) => invoke<void>(
+  writeFile: (workspaceId, name, markdown) => invoke<WorkspaceWriteResult>(
     channels.writeFile,
     { workspaceId, name, markdown },
   ),
@@ -85,7 +89,6 @@ const workspace: ElectronWorkspaceApi = {
 }
 
 const styleFolder: ElectronStyleFolderApi = {
-  open: () => invoke<StyleFolderSnapshot | undefined>(styleFolderChannels.open),
   restore: () => invoke<StyleFolderSnapshot | undefined>(styleFolderChannels.restore),
   reload: (folderId) => invoke<StyleFolderSnapshot>(
     styleFolderChannels.reload,
@@ -95,6 +98,7 @@ const styleFolder: ElectronStyleFolderApi = {
     styleFolderChannels.readFile,
     { folderId, name },
   ),
+  openFolder: () => invoke<void>(styleFolderChannels.openFolder),
 }
 
 contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder })

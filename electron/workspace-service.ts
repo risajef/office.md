@@ -12,6 +12,7 @@ import type {
   WorkspaceFileSnapshot,
   WorkspaceInfo,
   WorkspaceSnapshot,
+  WorkspaceWriteResult,
 } from '../src/workspace-port'
 
 type OpenWorkspaceRequest = { operation: 'open'; path: string }
@@ -44,6 +45,7 @@ export type ElectronWorkspaceResponse =
   | WorkspaceSnapshot
   | string
   | { dataUrl: string }
+  | WorkspaceWriteResult
   | { ok: true }
   | undefined
 
@@ -53,7 +55,7 @@ export type ElectronWorkspaceService = {
   reload: (workspaceId: string) => Promise<WorkspaceSnapshot>
   readFile: (workspaceId: string, name: string) => Promise<string>
   readAssetUrl: (workspaceId: string, name: string) => Promise<string | undefined>
-  writeFile: (workspaceId: string, name: string, markdown: string) => Promise<void>
+  writeFile: (workspaceId: string, name: string, markdown: string) => Promise<WorkspaceWriteResult>
   saveImageAsset: (
     workspaceId: string,
     directory: string,
@@ -75,6 +77,7 @@ export type ElectronWorkspaceService = {
 type OpenWorkspace = {
   info: WorkspaceInfo
   root: string
+  diskContents: Map<string, string>
 }
 
 const readWorkspaceFiles = async (
@@ -161,11 +164,19 @@ const resolveWorkspaceDirectory = async (root: string, name: string) => {
   return { path: resolved, name: normalizedName }
 }
 
-const createSnapshot = async (workspace: OpenWorkspace): Promise<WorkspaceSnapshot> => ({
-  workspace: { ...workspace.info },
-  files: await readWorkspaceFiles(workspace.root),
-  directories: await readWorkspaceDirectories(workspace.root),
-})
+const createSnapshot = async (workspace: OpenWorkspace): Promise<WorkspaceSnapshot> => {
+  const files = await readWorkspaceFiles(workspace.root)
+  workspace.diskContents = new Map(
+    files
+      .filter((file) => isEditableTextFile(file.name))
+      .map((file) => [file.name, file.markdown]),
+  )
+  return {
+    workspace: { ...workspace.info },
+    files,
+    directories: await readWorkspaceDirectories(workspace.root),
+  }
+}
 
 const entryExists = async (target: string) => {
   try {
@@ -198,7 +209,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
       path: root,
       name: path.basename(root) || root,
     }
-    const workspace = { info, root }
+    const workspace = { info, root, diskContents: new Map<string, string>() }
     workspaces.set(info.id, workspace)
     return createSnapshot(workspace)
   }
@@ -228,11 +239,41 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     return `data:${imageMimeType(name)};base64,${contents.toString('base64')}`
   }
 
-  const writeFile = async (workspaceId: string, name: string, markdown: string) => {
+  const writeFile = async (
+    workspaceId: string,
+    name: string,
+    markdown: string,
+  ): Promise<WorkspaceWriteResult> => {
     if (!isEditableTextFile(name)) throw new Error('The file name is invalid.')
     if (typeof markdown !== 'string') throw new Error('The file contents are invalid.')
-    const root = requireWorkspace(workspaceId).root
+    const workspace = requireWorkspace(workspaceId)
+    const root = workspace.root
     const target = resolveWorkspaceTarget(root, name)
+
+    let diskContents: string | undefined
+    try {
+      const stats = await fs.stat(target)
+      if (!stats.isFile()) throw new Error('Only files can be written.')
+      diskContents = await fs.readFile(target, 'utf8')
+    } catch (error) {
+      if (
+        !error || typeof error !== 'object' || !('code' in error) ||
+        error.code !== 'ENOENT'
+      ) throw error
+    }
+
+    const wasKnown = workspace.diskContents.has(name)
+    if (
+      (wasKnown && diskContents !== workspace.diskContents.get(name)) ||
+      (!wasKnown && diskContents !== undefined)
+    ) {
+      return {
+        status: 'conflict',
+        diskFileExists: diskContents !== undefined,
+        ...(diskContents === undefined ? {} : { diskContents }),
+      }
+    }
+
     await fs.mkdir(path.dirname(target), { recursive: true })
     const temporary = path.join(
       path.dirname(target),
@@ -245,6 +286,8 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
       await fs.rm(temporary, { force: true }).catch(() => undefined)
       throw error
     }
+    workspace.diskContents.set(name, markdown)
+    return { status: 'saved' }
   }
 
   const saveImageAsset = async (
@@ -306,7 +349,8 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     if (!isWorkspaceFile(oldName) || !isWorkspaceFile(newName)) {
       throw new Error('The file names are invalid.')
     }
-    const root = requireWorkspace(workspaceId).root
+    const workspace = requireWorkspace(workspaceId)
+    const root = workspace.root
     const source = resolveWorkspaceTarget(root, oldName)
     const destination = resolveWorkspaceTarget(root, newName)
     const sourceStats = await fs.stat(source)
@@ -317,6 +361,11 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     }
     await fs.mkdir(path.dirname(destination), { recursive: true })
     await fs.rename(source, destination)
+    const contents = workspace.diskContents.get(oldName)
+    if (contents !== undefined) {
+      workspace.diskContents.delete(oldName)
+      workspace.diskContents.set(newName, contents)
+    }
   }
 
   const createDirectory = async (workspaceId: string, name: string) => {
@@ -329,10 +378,12 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
 
   const deleteFile = async (workspaceId: string, name: string) => {
     if (!isWorkspaceFile(name)) throw new Error('The file name is invalid.')
-    const target = resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
+    const workspace = requireWorkspace(workspaceId)
+    const target = resolveWorkspaceTarget(workspace.root, name)
     const stats = await fs.stat(target)
     if (!stats.isFile()) throw new Error('Only files can be deleted.')
     await fs.unlink(target)
+    workspace.diskContents.delete(name)
   }
 
   const deleteDirectory = async (workspaceId: string, name: string) => {
@@ -374,8 +425,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
       }
       case 'writeFile': {
         const value = request as WorkspaceRequestBase & { name: string; markdown: string }
-        await writeFile(value.workspaceId, value.name, value.markdown)
-        return { ok: true }
+        return writeFile(value.workspaceId, value.name, value.markdown)
       }
       case 'saveImageAsset': {
         const value = request as WorkspaceRequestBase & {

@@ -13,7 +13,7 @@ const createElectronBackend = (
 ): StyleFolderBackend => ({
   name: 'electron-style-folder',
   isAvailable: async () => Boolean(api),
-  open: () => api?.open() ?? Promise.resolve(undefined),
+  open: () => api?.restore() ?? Promise.resolve(undefined),
   restore: () => api?.restore() ?? Promise.resolve(undefined),
   reload: () => {
     if (!api) throw new Error('The Electron style-folder bridge is unavailable.')
@@ -22,6 +22,9 @@ const createElectronBackend = (
   readFile: async () => {
     throw new Error('The Electron style-folder session is missing.')
   },
+  openFolder: () => api?.openFolder() ?? Promise.reject(
+    new Error('The Electron style-folder bridge is unavailable.'),
+  ),
 })
 
 export const createElectronStyleFolderPort = (
@@ -40,7 +43,7 @@ export const createElectronStyleFolderPort = (
     return result
   }
   const withFolder = <Result>(operation: (id: string) => Promise<Result>) => {
-    if (!folderId) throw new Error('Open the Electron style folder first.')
+    if (!folderId) throw new Error('The managed styles folder is not available.')
     return operation(folderId)
   }
 
@@ -54,5 +57,8 @@ export const createElectronStyleFolderPort = (
     readFile: (name) => withFolder((id) => api?.readFile(id, name) ?? Promise.reject(
       new Error('The Electron style-folder bridge is unavailable.'),
     )),
+    openFolder: () => backend.openFolder?.() ?? Promise.reject(
+      new Error('The Electron style-folder bridge is unavailable.'),
+    ),
   }])
 }

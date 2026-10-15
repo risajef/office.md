@@ -59,3 +59,49 @@ test('saves image bytes through the local workspace bridge without overwriting',
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('rejects a stale workspace write through the local filesystem bridge', async ({
+  request,
+}) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'office-md-stale-write-'))
+  const notePath = path.join(directory, 'notes.md')
+  await writeFile(notePath, '# Notes\n', 'utf8')
+
+  try {
+    const openedResponse = await request.post(
+      'http://127.0.0.1:4173/__office_md_fs/open',
+      { data: { path: directory } },
+    )
+    expect(openedResponse.ok()).toBe(true)
+    const opened = await openedResponse.json() as {
+      workspace: { id: string }
+    }
+    const diskContents = '# Edited outside office.md\n'
+    await writeFile(notePath, diskContents, 'utf8')
+
+    const savedResponse = await request.post(
+      'http://127.0.0.1:4173/__office_md_fs/write',
+      {
+        data: {
+          workspaceId: opened.workspace.id,
+          name: 'notes.md',
+          markdown: '# Local edit\n',
+        },
+      },
+    )
+    const result = await savedResponse.json() as {
+      status: string
+      diskFileExists: boolean
+      diskContents?: string
+    }
+
+    expect(result).toEqual({
+      status: 'conflict',
+      diskFileExists: true,
+      diskContents,
+    })
+    await expect(readFile(notePath, 'utf8')).resolves.toBe(diskContents)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})

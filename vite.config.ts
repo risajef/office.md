@@ -11,6 +11,7 @@ import {
   shouldSkipDirectory,
 } from './src/editable-files'
 import { normalizeStyleFilePath } from './src/style-folder-port'
+import type { WorkspaceWriteResult } from './src/workspace-port'
 
 const API_ROOT = '/__office_md_fs'
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -258,7 +259,26 @@ const installFilesystemMiddleware = (
   ) => void) => void },
 ) => {
   const workspaces = new Map<string, string>()
+  const workspaceDiskContents = new Map<string, Map<string, string>>()
   const styleFolders = new Map<string, string>()
+
+  const createWorkspaceSnapshot = async (workspace: {
+    id: string
+    path: string
+    name: string
+  }) => {
+    const files = await readWorkspaceFiles(workspace.path)
+    workspaceDiskContents.set(workspace.id, new Map(
+      files
+        .filter((file) => isEditableTextFile(file.name))
+        .map((file) => [file.name, file.markdown]),
+    ))
+    return {
+      workspace,
+      files,
+      directories: await readWorkspaceDirectories(workspace.path),
+    }
+  }
 
   middleware.use((request, response, next) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
@@ -348,11 +368,7 @@ const installFilesystemMiddleware = (
           name: path.basename(root) || root,
         }
         workspaces.set(workspace.id, root)
-        sendJson(response, 200, {
-          workspace,
-          files: await readWorkspaceFiles(root),
-          directories: await readWorkspaceDirectories(root),
-        })
+        sendJson(response, 200, await createWorkspaceSnapshot(workspace))
         return
       }
 
@@ -420,15 +436,12 @@ const installFilesystemMiddleware = (
       if (!root) throw new Error('The folder session expired. Open the folder again.')
 
       if (url.pathname === `${API_ROOT}/reload`) {
-        sendJson(response, 200, {
-          workspace: {
-            id: body.workspaceId,
-            path: root,
-            name: path.basename(root) || root,
-          },
-          files: await readWorkspaceFiles(root),
-          directories: await readWorkspaceDirectories(root),
-        })
+        const workspace = {
+          id: body.workspaceId,
+          path: root,
+          name: path.basename(root) || root,
+        }
+        sendJson(response, 200, await createWorkspaceSnapshot(workspace))
         return
       }
 
@@ -460,6 +473,7 @@ const installFilesystemMiddleware = (
         const stats = await fs.stat(target)
         if (!stats.isFile()) throw new Error('Only files can be deleted.')
         await fs.unlink(target)
+        workspaceDiskContents.get(body.workspaceId)?.delete(body.name)
         sendJson(response, 200, { ok: true })
         return
       }
@@ -485,6 +499,32 @@ const installFilesystemMiddleware = (
           throw new Error('The file contents are invalid.')
         }
         const target = resolveWorkspaceTarget(root, body.name)
+        let diskContents: string | undefined
+        try {
+          const stats = await fs.stat(target)
+          if (!stats.isFile()) throw new Error('Only files can be written.')
+          diskContents = await fs.readFile(target, 'utf8')
+        } catch (error) {
+          if (
+            !error || typeof error !== 'object' || !('code' in error) ||
+            error.code !== 'ENOENT'
+          ) throw error
+        }
+        const knownContents = workspaceDiskContents.get(body.workspaceId)
+        if (!knownContents) throw new Error('Reload the folder before saving changes.')
+        const wasKnown = knownContents.has(body.name)
+        if (
+          (wasKnown && diskContents !== knownContents.get(body.name)) ||
+          (!wasKnown && diskContents !== undefined)
+        ) {
+          const conflict: WorkspaceWriteResult = {
+            status: 'conflict',
+            diskFileExists: diskContents !== undefined,
+            ...(diskContents === undefined ? {} : { diskContents }),
+          }
+          sendJson(response, 200, conflict)
+          return
+        }
         await fs.mkdir(path.dirname(target), { recursive: true })
         const temporary = path.join(
           path.dirname(target),
@@ -497,7 +537,8 @@ const installFilesystemMiddleware = (
           await fs.rm(temporary, { force: true }).catch(() => undefined)
           throw error
         }
-        sendJson(response, 200, { ok: true })
+        knownContents.set(body.name, body.markdown)
+        sendJson(response, 200, { status: 'saved' })
         return
       }
 
@@ -532,6 +573,12 @@ const installFilesystemMiddleware = (
         }
         await fs.mkdir(path.dirname(destination), { recursive: true })
         await fs.rename(source, destination)
+        const knownContents = workspaceDiskContents.get(body.workspaceId)
+        const knownFileContents = knownContents?.get(body.oldName)
+        if (knownFileContents !== undefined) {
+          knownContents?.delete(body.oldName)
+          knownContents?.set(body.newName, knownFileContents)
+        }
         sendJson(response, 200, { ok: true })
         return
       }

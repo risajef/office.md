@@ -167,6 +167,93 @@ describe('Web workspace port', () => {
     }
   })
 
+  it('rejects a stale browser-folder write and preserves the disk version', async () => {
+    const storedFiles = new Map<string, string>([['notes.md', '# Notes\n']])
+    const noteHandle: LocalFileHandle = {
+      kind: 'file',
+      name: 'notes.md',
+      getFile: async () => new File([storedFiles.get('notes.md') ?? ''], 'notes.md'),
+      createWritable: async () => ({
+        write: async (contents) => {
+          storedFiles.set('notes.md', typeof contents === 'string'
+            ? contents
+            : new TextDecoder().decode(contents))
+        },
+        close: async () => undefined,
+      }),
+    }
+    const root: LocalDirectoryHandle = {
+      kind: 'directory',
+      name: 'project',
+      entries: async function* () { yield ['notes.md', noteHandle] },
+    }
+    const originalPicker = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker')
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(async () => root),
+    })
+
+    try {
+      const port = createWebWorkspacePort([createDefaultWebWorkspaceBackends()[1]])
+      await port.open()
+      storedFiles.set('notes.md', '# Edited outside office.md\n')
+
+      await expect(port.writeFile('notes.md', '# Local edit\n'))
+        .rejects.toThrow('changed outside office.md')
+      expect(storedFiles.get('notes.md')).toBe('# Edited outside office.md\n')
+    } finally {
+      if (originalPicker) {
+        Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
+      } else {
+        delete (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker
+      }
+    }
+  })
+
+  it('does not request browser-folder permission during a background refresh', async () => {
+    let permission: 'granted' | 'prompt' = 'granted'
+    const requestPermission = vi.fn(async () => 'denied' as const)
+    const file: LocalFileHandle = {
+      kind: 'file',
+      name: 'notes.md',
+      getFile: async () => new File(['# Notes\n'], 'notes.md'),
+      createWritable: async () => ({
+        write: async () => undefined,
+        close: async () => undefined,
+      }),
+    }
+    const root: LocalDirectoryHandle = {
+      kind: 'directory',
+      name: 'project',
+      entries: async function* () { yield ['notes.md', file] },
+      queryPermission: async () => permission,
+      requestPermission,
+    }
+    const originalPicker = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker')
+    Object.defineProperty(window, 'showDirectoryPicker', {
+      configurable: true,
+      value: vi.fn(async () => root),
+    })
+
+    try {
+      const port = createWebWorkspacePort([createDefaultWebWorkspaceBackends()[1]])
+      await port.open()
+      permission = 'prompt'
+
+      const refresher = port as typeof port & {
+        refresh: () => Promise<WorkspaceSnapshot>
+      }
+      await expect(refresher.refresh()).rejects.toThrow('permission')
+      expect(requestPermission).not.toHaveBeenCalled()
+    } finally {
+      if (originalPicker) {
+        Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
+      } else {
+        delete (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker
+      }
+    }
+  })
+
   it('reports when no supported workspace access mechanism is available', async () => {
     const unavailable = backend('server', {
       isAvailable: vi.fn(async () => false),

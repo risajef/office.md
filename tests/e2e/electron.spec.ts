@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { _electron as electron, expect, test, type Page } from '@playwright/test'
@@ -164,23 +164,22 @@ test('shows Help information and update actions without a startup update notific
   }
 })
 
-test('restores the last readable independent style folder across Electron launches', async () => {
+test('initializes, opens, and preserves the managed styles folder across Electron launches', async () => {
   test.skip(!existsSync(electronPath), 'Electron binary is not installed.')
   test.skip(needsXvfb && !existsSync('/usr/bin/Xvfb'), 'Xvfb is not installed.')
 
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-style-workspace-'))
-  const styles = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-style-folder-'))
   const userData = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-style-user-data-'))
+  const openedPathLog = path.join(userData, 'opened-styles-path.txt')
+  const managedStyles = path.join(userData, 'styles')
   await writeRepresentativeWorkspace(workspace)
-  await writeFile(path.join(styles, 'desktop.css'), '.ProseMirror { color: rgb(30, 90, 160); }\n')
 
-  const launch = async (stylePath?: string) => {
+  const launch = async () => {
     const environment = { ...process.env }
     delete environment.ELECTRON_RUN_AS_NODE
     environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
     environment.OFFICE_MD_TEST_WORKSPACE = workspace
-    if (stylePath) environment.OFFICE_MD_TEST_STYLE_FOLDER = stylePath
-    else delete environment.OFFICE_MD_TEST_STYLE_FOLDER
+    environment.OFFICE_MD_TEST_STYLE_FOLDER_OPEN_LOG = openedPathLog
     const virtualDisplay = needsXvfb ? await startXvfb() : undefined
     if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
     const application = await electron.launch({
@@ -193,15 +192,32 @@ test('restores the last readable independent style folder across Electron launch
 
   let first: Awaited<ReturnType<typeof launch>> | undefined
   let second: Awaited<ReturnType<typeof launch>> | undefined
-  let third: Awaited<ReturnType<typeof launch>> | undefined
   try {
-    first = await launch(styles)
+    first = await launch()
     const firstPage = first.application.windows()[0] ?? await first.application.firstWindow()
     await openTestWorkspace(firstPage)
-    await firstPage.locator('#open-style-folder').click()
-    await expect(firstPage.locator('#style-folder-status')).toContainText('1 CSS themes')
+    await expect(firstPage.locator('#style-folder-status')).toContainText('6 CSS themes')
+    await expect(firstPage.locator('#open-style-folder')).toHaveText('Open styles folder')
     await expect(firstPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
-      .toHaveCount(1)
+      .toHaveCount(6)
+    await expect(firstPage.locator('.style-theme-select[data-theme-origin="bundled"]'))
+      .toHaveCount(0)
+    await firstPage.locator('#open-style-folder').click()
+    await expect.poll(() => readFile(openedPathLog, 'utf8')).toBe(managedStyles)
+
+    await firstPage.locator('.style-theme-select[aria-label^="Apply paper.css"]').click()
+    const paperCss = `.editor-wrap .ProseMirror { color: rgb(30, 90, 160); }\n`
+    await writeFile(path.join(managedStyles, 'paper.css'), paperCss)
+    const customCss = `.editor-wrap .ProseMirror { background: rgb(30, 70, 30); }\n`
+    await writeFile(path.join(managedStyles, 'custom.css'), customCss)
+    await firstPage.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await expect(firstPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
+      .toHaveCount(7)
+    await expect.poll(() => firstPage.locator('style[data-theme-origin="style-folder"]')
+      .evaluate((style) => Array.from(style.sheet?.cssRules ?? [])
+        .map((rule) => rule.cssText).join(' ')))
+      .toContain('rgb(30, 90, 160)')
+
     await first.application.close()
     first.virtualDisplay?.process.kill()
     first = undefined
@@ -209,29 +225,42 @@ test('restores the last readable independent style folder across Electron launch
     second = await launch()
     const secondPage = second.application.windows()[0] ?? await second.application.firstWindow()
     await openTestWorkspace(secondPage)
-    await expect(secondPage.locator('#style-folder-status')).toContainText('1 CSS themes')
+    await expect(secondPage.locator('#style-folder-status')).toContainText('7 CSS themes')
     await expect(secondPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
-      .toHaveCount(1)
-    await second.application.close()
-    second.virtualDisplay?.process.kill()
-    second = undefined
+      .toHaveCount(7)
+    await secondPage.locator('.style-theme-select[aria-label^="Apply custom.css"]').click()
+    await expect.poll(() => secondPage.locator('style[data-theme-origin="style-folder"]')
+      .evaluate((style) => Array.from(style.sheet?.cssRules ?? [])
+        .map((rule) => rule.cssText).join(' ')))
+      .toContain('rgb(30, 70, 30)')
+    await secondPage.locator('.style-theme-select[aria-label^="Apply paper.css"]').click()
+    await expect.poll(() => secondPage.locator('style[data-theme-origin="style-folder"]')
+      .evaluate((style) => Array.from(style.sheet?.cssRules ?? [])
+        .map((rule) => rule.cssText).join(' ')))
+      .toContain('rgb(30, 90, 160)')
 
-    await rm(styles, { recursive: true, force: true })
-    third = await launch()
-    const thirdPage = third.application.windows()[0] ?? await third.application.firstWindow()
-    await expect(thirdPage.locator('#startup-choice')).toBeVisible({ timeout: 30_000 })
-    await expect(thirdPage.locator('#startup-open-folder')).toBeVisible()
-    await expect(thirdPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
+    const unavailableStyles = `${managedStyles}-temporarily-unavailable`
+    await rename(managedStyles, unavailableStyles)
+    await secondPage.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await expect(secondPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
+      .toHaveCount(7)
+    await expect(secondPage.locator('style[data-theme-origin="style-folder"]'))
+      .toHaveCount(1)
+    await rename(unavailableStyles, managedStyles)
+    await rm(path.join(managedStyles, 'paper.css'))
+    await secondPage.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await expect(secondPage.locator('.style-theme-select[aria-label^="Apply paper.css"]'))
       .toHaveCount(0)
+    await expect(secondPage.locator('style[data-theme-origin="style-folder"]'))
+      .toHaveCount(0)
+    await expect(secondPage.locator('.style-theme-select[data-theme-origin="style-folder"]'))
+      .toHaveCount(6)
   } finally {
     await first?.application.close()
     first?.virtualDisplay?.process.kill()
     await second?.application.close()
     second?.virtualDisplay?.process.kill()
-    await third?.application.close()
-    third?.virtualDisplay?.process.kill()
     await rm(workspace, { recursive: true, force: true })
-    await rm(styles, { recursive: true, force: true })
     await rm(userData, { recursive: true, force: true })
   }
 })

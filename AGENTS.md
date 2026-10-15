@@ -52,3 +52,9 @@ npm run spec:validate
 ```
 
 Browser tests use real temporary workspaces and may require a locally installed Playwright Chromium. Never commit generated `dist/`, `playwright-report/`, or `test-results/` output.
+
+## Commit workflow
+
+- After completing the requested work and its applicable verification, create a Git commit by default. Write a concise message that describes the change; do not wait for the user to write one.
+- Before staging, inspect `git status` and the diff. Stage only files belonging to the current task, preserve pre-existing user changes, and include the relevant OpenSpec artifacts with the implementation.
+- Do not commit incomplete work or generated output. If verification fails or a commit cannot be made, explain what remains and why.

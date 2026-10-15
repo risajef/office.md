@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createWorkspaceApplication } from '../../src/workspace-application'
-import { createMemoryWorkspacePort } from '../../src/workspace-port'
+import {
+  createMemoryWorkspacePort,
+  type WorkspaceSnapshot,
+} from '../../src/workspace-port'
 import {
   representativeCsvSource,
   representativeDocument,
@@ -43,6 +46,86 @@ describe('WorkspaceApplication', () => {
     const reloaded = await application.reload()
     expect(reloaded.files.find((file) => file.name === 'metrics.csv')?.markdown)
       .toBe(changedCsv)
+  })
+
+  it('refreshes added files and external edits through its public port', async () => {
+    const initial: WorkspaceSnapshot = {
+      workspace: {
+        id: 'refresh-project',
+        name: 'refresh-project',
+        path: '/tmp/refresh-project',
+      },
+      files: [{ name: 'notes.md', markdown: '# Notes\n' }],
+      directories: [],
+    }
+    const changed: WorkspaceSnapshot = {
+      ...initial,
+      files: [
+        { name: 'notes.md', markdown: '# Edited outside office.md\n' },
+        { name: 'added.md', markdown: '# Added externally\n' },
+      ],
+      directories: ['drafts'],
+    }
+    const port = Object.assign(
+      createMemoryWorkspacePort({
+        path: initial.workspace.path,
+        name: initial.workspace.name,
+        files: initial.files,
+      }),
+      { refresh: async () => changed },
+    )
+    const application = createWorkspaceApplication(port)
+    await application.open()
+
+    const refresher = application as typeof application & {
+      refresh: () => Promise<WorkspaceSnapshot>
+    }
+    const refreshed = await refresher.refresh()
+
+    expect(refreshed.files).toEqual(changed.files)
+    expect(refreshed.directories).toEqual(['drafts'])
+    expect(application.file('notes.md')?.markdown).toBe('# Edited outside office.md\n')
+    expect(application.file('added.md')?.markdown).toBe('# Added externally\n')
+  })
+
+  it('preserves the cached snapshot when a background refresh fails', async () => {
+    const changed: WorkspaceSnapshot = {
+      workspace: {
+        id: 'refresh-project',
+        name: 'refresh-project',
+        path: '/tmp/refresh-project',
+      },
+      files: [{ name: 'notes.md', markdown: '# Edited outside office.md\n' }],
+      directories: [],
+    }
+    let failRefresh = true
+    const port = Object.assign(
+      createMemoryWorkspacePort({
+        path: '/tmp/refresh-project',
+        name: 'refresh-project',
+        files: [{ name: 'notes.md', markdown: '# Notes\n' }],
+      }),
+      {
+        refresh: async () => {
+          if (failRefresh) throw new Error('The folder is temporarily unavailable.')
+          return changed
+        },
+      },
+    )
+    const application = createWorkspaceApplication(port)
+    await application.open()
+    const initialState = application.state
+    const refresher = application as typeof application & {
+      refresh: () => Promise<WorkspaceSnapshot>
+    }
+
+    await expect(refresher.refresh()).rejects.toThrow('temporarily unavailable')
+    expect(application.state).toEqual(initialState)
+
+    failRefresh = false
+    await refresher.refresh()
+    expect(application.file('notes.md')?.markdown)
+      .toBe('# Edited outside office.md\n')
   })
 
   it('adds a saved image to the workspace snapshot and keeps its bytes readable', async () => {

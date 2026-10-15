@@ -96,6 +96,8 @@ npm run build
 
 Use `$openspec-verify-change <change-name>` to check completeness, correctness, and coherence. Then use `$openspec-sync-specs <change-name>` to merge the delta into the main specs and `$openspec-archive-change <change-name>` when all tasks are checked off. Keep the archived change with the code in the same commit or pull request so the decision trail remains reviewable.
 
+After the requested work is complete and applicable verification passes, create a Git commit by default and write a concise message that describes the change. Inspect `git status` and the diff before staging; stage only files belonging to the current task, keep pre-existing user changes out of the commit, and include the relevant OpenSpec artifacts with the implementation. Do not commit incomplete work or generated output. If verification fails or a commit cannot be made, report what remains and why.
+
 ## CLI setup
 
 The repository pins OpenSpec `1.11.0` as a development dependency for validation scripts. The interactive Codex skills expect the same CLI on `PATH`:

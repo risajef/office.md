@@ -6,6 +6,8 @@ import {
   type WorkspaceBackend,
   type WorkspacePort,
   type WorkspaceSnapshot,
+  WorkspaceFileConflictError,
+  throwOnWorkspaceWriteConflict,
 } from './workspace-port'
 import { isEditableDocumentFile } from './editable-files'
 import {
@@ -189,10 +191,26 @@ const createLocalServerBackend = (): WorkspaceBackend => {
     try {
       return await operation(current.id)
     } catch (firstError) {
+      if (firstError instanceof WorkspaceFileConflictError) throw firstError
       const reconnected = await reconnect().catch(() => undefined)
       if (!reconnected) throw firstError
       return operation(reconnected.workspace.id)
     }
+  }
+
+  const refreshWorkspace = async () => {
+    const snapshot = workspace
+      ? await reloadLocalServerWorkspace(workspace.id).catch(async (firstError) => {
+        const reconnected = await reconnect().catch(() => undefined)
+        if (!reconnected) throw firstError
+        return reconnected
+      })
+      : await reconnect()
+    if (!snapshot) throw new Error('Open the local folder before reloading from disk.')
+    workspace = snapshot.workspace
+    const normalized = serverSnapshot(snapshot)
+    currentSnapshot = normalized
+    return normalized
   }
 
   return {
@@ -252,19 +270,8 @@ const createLocalServerBackend = (): WorkspaceBackend => {
       const snapshot = await reconnect()
       return snapshot ? currentSnapshot : undefined
     },
-    async reload() {
-      const snapshot = workspace
-        ? await reloadLocalServerWorkspace(workspace.id).catch(async (firstError) => {
-          const reconnected = await reconnect().catch(() => undefined)
-          if (!reconnected) throw firstError
-          return reconnected
-        })
-        : await reconnect()
-      if (!snapshot) throw new Error('Open the local folder before reloading from disk.')
-      workspace = snapshot.workspace
-      currentSnapshot = serverSnapshot(snapshot)
-      return currentSnapshot
-    },
+    refresh: refreshWorkspace,
+    reload: refreshWorkspace,
     async readFile(name) {
       const file = currentSnapshot?.files.find((candidate) => candidate.name === name)
       if (!file) throw new Error(`The file ${name} was not found.`)
@@ -275,8 +282,15 @@ const createLocalServerBackend = (): WorkspaceBackend => {
       return getLocalServerAssetUrl(workspace.id, name)
     },
     async writeFile(name, markdown) {
-      await withWorkspace((workspaceId) =>
+      const result = await withWorkspace((workspaceId) =>
         writeLocalServerFile(workspaceId, name, markdown))
+      throwOnWorkspaceWriteConflict(name, result)
+      const current = currentSnapshot?.files.find((file) => file.name === name)
+      if (current) current.markdown = markdown
+      else if (currentSnapshot) {
+        currentSnapshot.files.push({ name, markdown })
+        currentSnapshot.files.sort((left, right) => left.name.localeCompare(right.name))
+      }
     },
     async saveImageAsset(directory, suggestedName, bytes) {
       const name = await withWorkspace((workspaceId) =>
@@ -386,6 +400,11 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
       if (!selected) throw new Error('Open a folder before reloading from disk.')
       return refresh(selected, true)
     },
+    async refresh() {
+      const selected = directory ?? await restoreLocalDirectory()
+      if (!selected) throw new Error('Open a folder before refreshing from disk.')
+      return refresh(selected, false)
+    },
     async readFile(name) {
       const file = currentSnapshot?.files.find((candidate) => candidate.name === name)
       if (!file) throw new Error(`The file ${name} was not found.`)
@@ -405,15 +424,33 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
       if (!await ensureLocalPermission(selected, 'readwrite', true)) {
         throw new Error('Read and write permission is required for this folder.')
       }
+      const knownFile = currentSnapshot?.files.find((file) => file.name === name)
       let handle = await findLocalFileHandle(selected, name)
+      let created = false
       if (!handle && selected.getFileHandle && !name.includes('/')) {
         handle = await selected.getFileHandle(name, { create: true })
+        created = true
+      }
+      if (!handle && knownFile) {
+        throw new WorkspaceFileConflictError(name, false)
       }
       if (!handle) throw new Error(`Could not find ${name} in the open folder.`)
+      if (!created) {
+        const diskContents = await (await handle.getFile()).text()
+        if (!knownFile || diskContents !== knownFile.markdown) {
+          throw new WorkspaceFileConflictError(name, true, diskContents)
+        }
+      }
       await writeLocalTextFile(
         { handle, markdown },
         { requestPermission: false },
       )
+      if (knownFile) {
+        knownFile.markdown = markdown
+      } else if (currentSnapshot) {
+        currentSnapshot.files.push({ name, markdown })
+        currentSnapshot.files.sort((left, right) => left.name.localeCompare(right.name))
+      }
     },
     async saveImageAsset(imageDirectory, suggestedName, bytes) {
       const selected = requireDirectory()

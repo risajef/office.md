@@ -24,6 +24,7 @@ export type StyleFolderBackend = {
   restore: () => Promise<StyleFolderSnapshot | undefined>
   reload: () => Promise<StyleFolderSnapshot>
   readFile: (name: string) => Promise<string>
+  openFolder?: () => Promise<void>
 }
 
 export type StyleFolderPort = {
@@ -33,6 +34,7 @@ export type StyleFolderPort = {
   restore: () => Promise<StyleFolderSnapshot | undefined>
   reload: () => Promise<StyleFolderSnapshot>
   readFile: (name: string) => Promise<string>
+  openFolder: () => Promise<void>
 }
 
 export type MemoryStyleFileSeed = {
@@ -169,6 +171,11 @@ const createPortFromBackends = (
       normalizeStyleFilePath(name)
       return requireBackend().readFile(name)
     },
+    async openFolder() {
+      const backend = requireBackend()
+      if (!backend.openFolder) throw new Error('Opening the styles folder is not supported here.')
+      await backend.openFolder()
+    },
   }
 }
 
@@ -235,6 +242,9 @@ export const createMemoryStyleFolderPort = (
       const value = contents.get(normalized)
       if (value === undefined) throw new Error(`The style file ${normalized} was not found.`)
       return value
+    },
+    async openFolder() {
+      throw new Error('Opening the styles folder is not supported here.')
     },
   }
 }

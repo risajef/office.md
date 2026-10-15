@@ -90,8 +90,11 @@ import {
   applyDocumentTheme,
   type DocumentThemeSource,
 } from './document-theme'
-import type { WorkspaceSnapshot } from './workspace-port'
-import type { WorkspaceFileSnapshot } from './workspace-port'
+import {
+  WorkspaceFileConflictError,
+  type WorkspaceSnapshot,
+  type WorkspaceFileSnapshot,
+} from './workspace-port'
 import { firstVisibleEditableWorkspaceFile } from './workspace-file-order'
 import type {
   StyleFileSnapshot,
@@ -266,11 +269,12 @@ const pageSettingsButton = document.querySelector<HTMLButtonElement>('#page-sett
 const presentButton = document.querySelector<HTMLButtonElement>('#present-document')
 const pageCountElement = document.querySelector<HTMLElement>('#page-count')
 const fileListElement = document.querySelector<HTMLUListElement>('#file-list')
+const workspaceConflictsElement = document.querySelector<HTMLElement>('#workspace-conflicts')
 const newFileButton = document.querySelector<HTMLButtonElement>('#new-file')
 const newFolderButton = document.querySelector<HTMLButtonElement>('#new-folder')
 const openFolderButton = document.querySelector<HTMLButtonElement>('#open-folder')
 const folderStatus = document.querySelector<HTMLElement>('#folder-status')
-const openStyleFolderButton = document.querySelector<HTMLButtonElement>('#open-style-folder')
+const styleFolderActions = document.querySelector<HTMLElement>('#style-folder-actions')
 const styleFolderStatus = document.querySelector<HTMLElement>('#style-folder-status')
 const styleThemeListElement = document.querySelector<HTMLUListElement>('#style-theme-list')
 const editorCard = document.querySelector<HTMLElement>('.editor-card')
@@ -499,6 +503,14 @@ type WorkspaceFile = {
   source?: 'browser' | 'disk'
 }
 
+type WorkspaceConflict = {
+  fileId: string
+  fileName: string
+  localMarkdown: string
+  diskFileExists: boolean
+  diskMarkdown?: string
+}
+
 const exampleMarkdownFiles = Object.entries(exampleMarkdownModules)
   .map(([path, markdown]) => ({
     id: `example:${path}`,
@@ -517,6 +529,17 @@ const exampleCssFiles = Object.entries(exampleCssModules)
     source: 'browser' as const,
   }))
 
+const bundledStyleFiles: StyleFileSnapshot[] = exampleCssFiles
+  .map((file) => {
+    const name = file.name.replace(/^styles\//, '')
+    return {
+      id: `bundled-style:${name}`,
+      name,
+      contents: file.markdown,
+    }
+  })
+  .sort((left, right) => left.name.localeCompare(right.name))
+
 const exampleCsvFiles = Object.entries(exampleCsvModules)
   .map(([path, csv]) => ({
     id: `example:${path}`,
@@ -526,7 +549,7 @@ const exampleCsvFiles = Object.entries(exampleCsvModules)
     source: 'browser' as const,
   }))
 
-const exampleFiles = [...exampleMarkdownFiles, ...exampleCssFiles, ...exampleCsvFiles]
+const exampleFiles = [...exampleMarkdownFiles, ...exampleCsvFiles]
   .sort((left, right) => {
     const leftIsTour = left.name === 'feature-tour.md'
     const rightIsTour = right.name === 'feature-tour.md'
@@ -612,6 +635,18 @@ const editorRuntime = createEditorRuntime(
 )
 const workspaceApplication = editorRuntime.workspace
 const styleFolderApplication = editorRuntime.styleFolder
+const isElectronRuntime = editorRuntime.styleFolderPort?.host === 'electron'
+const openStyleFolderButton = isElectronRuntime
+  ? document.createElement('button')
+  : undefined
+if (openStyleFolderButton) {
+  openStyleFolderButton.className = 'folder-button'
+  openStyleFolderButton.id = 'open-style-folder'
+  openStyleFolderButton.type = 'button'
+  openStyleFolderButton.textContent = 'Open styles folder'
+  openStyleFolderButton.setAttribute('aria-label', 'Open styles folder')
+  styleFolderActions?.append(openStyleFolderButton)
+}
 const styleFolderFiles: StyleFileSnapshot[] = []
 let styleFolderInfo: StyleFolderInfo | undefined
 let styleFolderUnavailable = false
@@ -633,6 +668,7 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
 let workspaceCacheUnavailable = false
 const dirtyDiskFiles = new Set<string>()
 const cleanMarkdownByFile = new Map<string, string>()
+const workspaceConflicts = new Map<string, WorkspaceConflict>()
 const evaluatedCsvSources = new Map<string, string>()
 const collapsedFolders = new Set<string>()
 let workspaceActionPending = false
@@ -1308,11 +1344,20 @@ const styleFolderThemeSource = (file: StyleFileSnapshot): DocumentThemeSource =>
   origin: 'style-folder',
 })
 
+const bundledThemeSource = (file: StyleFileSnapshot): DocumentThemeSource => ({
+  id: file.id,
+  name: file.name,
+  contents: file.contents,
+  origin: 'bundled',
+})
+
 const availableDocumentThemes = () => [
   ...workspaceFiles
     .map(workspaceThemeSource)
     .filter((theme): theme is DocumentThemeSource => Boolean(theme)),
-  ...styleFolderFiles.map(styleFolderThemeSource),
+  ...(isElectronRuntime && styleFolderInfo && !styleFolderUnavailable
+    ? styleFolderFiles.map(styleFolderThemeSource)
+    : bundledStyleFiles.map(bundledThemeSource)),
 ]
 
 const renderStyleChoices = () => {
@@ -1330,7 +1375,7 @@ const renderStyleChoices = () => {
   if (styleFolderInfo && !styleFolderFiles.length) {
     const empty = document.createElement('li')
     empty.className = 'style-theme-empty'
-    empty.textContent = 'No CSS themes found in the selected style folder.'
+    empty.textContent = 'No CSS themes found in the styles folder.'
     styleThemeListElement.append(empty)
   }
 
@@ -1347,8 +1392,10 @@ const renderStyleChoices = () => {
     button.dataset.themeOrigin = theme.origin
     button.dataset.themeId = theme.id
     const sourceLabel = theme.origin === 'style-folder'
-      ? styleFolderInfo?.name ?? 'Style folder'
-      : 'Workspace'
+      ? styleFolderInfo?.name ?? 'Styles folder'
+      : theme.origin === 'workspace'
+        ? 'Workspace'
+        : 'Built in'
     button.title = `Apply ${theme.name} · ${sourceLabel}`
     button.dataset.tooltip = button.title
     button.setAttribute('aria-label', button.title)
@@ -1900,11 +1947,66 @@ const setCsvStatus = (
   if (dot) dot.dataset.state = state
 }
 
+const renderWorkspaceConflicts = (editor: EditorInstance) => {
+  if (!workspaceConflictsElement) return
+  workspaceConflictsElement.replaceChildren()
+  workspaceConflictsElement.hidden = workspaceConflicts.size === 0
+  for (const conflict of workspaceConflicts.values()) {
+    const notice = document.createElement('section')
+    notice.className = 'workspace-conflict'
+    notice.dataset.workspaceConflict = conflict.fileName
+
+    const message = document.createElement('p')
+    message.textContent = conflict.diskFileExists
+      ? `${conflict.fileName} changed outside office.md. Choose which version to keep.`
+      : `${conflict.fileName} was removed outside office.md. Keep your version to recreate it, or use the disk version to close it.`
+
+    const actions = document.createElement('div')
+    actions.className = 'workspace-conflict-actions'
+    const diskButton = document.createElement('button')
+    diskButton.type = 'button'
+    diskButton.textContent = 'Use disk version'
+    diskButton.addEventListener('click', () => {
+      void resolveWorkspaceConflict(editor, conflict.fileId, 'disk')
+    })
+    const localButton = document.createElement('button')
+    localButton.type = 'button'
+    localButton.textContent = 'Keep my version'
+    localButton.addEventListener('click', () => {
+      void resolveWorkspaceConflict(editor, conflict.fileId, 'local')
+    })
+    actions.append(diskButton, localButton)
+    notice.append(message, actions)
+    workspaceConflictsElement.append(notice)
+  }
+}
+
+const setWorkspaceConflict = (
+  file: WorkspaceFile,
+  diskFileExists: boolean,
+  diskMarkdown?: string,
+) => {
+  const localMarkdown = file.kind === 'markdown' && workspaceEditor && activeFile()?.id === file.id
+    ? getMarkdown(workspaceEditor)
+    : file.markdown
+  file.markdown = localMarkdown
+  workspaceConflicts.set(file.id, {
+    fileId: file.id,
+    fileName: file.name,
+    localMarkdown,
+    diskFileExists,
+    diskMarkdown,
+  })
+  if (workspaceEditor) renderWorkspaceConflicts(workspaceEditor)
+  setStatus(`${file.name} changed outside office.md · choose a version`, 'ready')
+}
+
 const saveDiskFile = async (
   file: WorkspaceFile,
   _options: { requestPermission?: boolean } = {},
 ) => {
   if (!isDiskBackedFile(file)) return true
+  if (workspaceConflicts.has(file.id)) return false
 
   try {
     await workspaceApplication.saveFile(file.name, file.markdown)
@@ -1912,6 +2014,10 @@ const saveDiskFile = async (
     cleanMarkdownByFile.set(file.id, file.markdown)
     return true
   } catch (error) {
+    if (error instanceof WorkspaceFileConflictError) {
+      setWorkspaceConflict(file, error.diskFileExists, error.diskContents)
+      return false
+    }
     console.error(`Could not store ${file.name}.`, error)
     const message = error instanceof Error ? error.message : `Could not store ${file.name}.`
     dirtyDiskFiles.add(file.id)
@@ -1966,7 +2072,7 @@ const reloadProject = async (editor: EditorInstance) => {
     setStatus(
       styleAvailable
         ? `Reloaded ${snapshot.workspace.name} from disk`
-        : `Reloaded ${snapshot.workspace.name}; select the style folder again`,
+        : `Reloaded ${snapshot.workspace.name}; bundled styles remain available`,
       styleAvailable ? 'saved' : 'ready',
     )
     setCsvStatus(`Reloaded ${snapshot.workspace.name} from disk`)
@@ -2828,11 +2934,15 @@ const deleteWorkspaceFile = async (editor: EditorInstance, fileId: string) => {
 const updateStyleFolderStatus = () => {
   if (!styleFolderStatus) return
   if (styleFolderUnavailable) {
-    styleFolderStatus.textContent = 'Style folder unavailable · select again'
+    styleFolderStatus.textContent = 'Styles folder unavailable · bundled themes available'
+    return
+  }
+  if (!isElectronRuntime) {
+    styleFolderStatus.textContent = `Bundled themes · ${bundledStyleFiles.length} CSS themes`
     return
   }
   if (!styleFolderInfo) {
-    styleFolderStatus.textContent = 'No independent style folder selected'
+    styleFolderStatus.textContent = `Bundled themes · ${bundledStyleFiles.length} CSS themes`
     return
   }
   styleFolderStatus.textContent = styleFolderFiles.length
@@ -2853,7 +2963,9 @@ const clearDocumentTheme = () => {
   renderStyleChoices()
 }
 
-const clearStyleFolderState = (message = 'Style folder unavailable · select it again') => {
+const clearStyleFolderState = (
+  message = 'Styles folder unavailable · bundled themes are still available',
+) => {
   styleFolderApplication?.clear()
   styleFolderFiles.splice(0, styleFolderFiles.length)
   styleFolderInfo = undefined
@@ -2926,6 +3038,8 @@ const loadWorkspaceFromSnapshot = async (
 ) => {
   dirtyDiskFiles.clear()
   cleanMarkdownByFile.clear()
+  workspaceConflicts.clear()
+  if (options.editor) renderWorkspaceConflicts(options.editor)
   if (options.editor && activeCsvWorksheet) destroyCsvEditor()
   if (newFolderButton) newFolderButton.disabled = false
   replaceWorkspaceFiles(
@@ -2966,6 +3080,259 @@ const loadWorkspaceFromSnapshot = async (
   return snapshot.files.length
 }
 
+const workspaceFileHasLocalEdits = (editor: EditorInstance, file: WorkspaceFile) => {
+  if (!dirtyDiskFiles.has(file.id)) return false
+  if (file.kind === 'markdown' && activeFile()?.id === file.id) {
+    file.markdown = getMarkdown(editor)
+  }
+  const cleanMarkdown = cleanMarkdownByFile.get(file.id)
+  return cleanMarkdown === undefined || file.markdown !== cleanMarkdown
+}
+
+const activateAvailableWorkspaceFile = (editor: EditorInstance) => {
+  const nextName = firstVisibleEditableWorkspaceFile(workspaceFiles, workspaceDirectories)
+  const next = workspaceFiles.find((file) => file.name === nextName)
+    ?? workspaceFiles.find((file) => isEditableDocumentFile(file.name))
+  activeFileId = next?.id ?? ''
+  if (next?.kind === 'markdown') lastMarkdownFileId = next.id
+  if (activeCsvFileId) {
+    activeCsvFileId = undefined
+    destroyCsvEditor()
+  }
+  activateWorkspaceFile(editor)
+}
+
+const reconcileWorkspaceSnapshot = async (
+  editor: EditorInstance,
+  previous: WorkspaceSnapshot,
+  snapshot: WorkspaceSnapshot,
+) => {
+  const previousFiles = new Map(previous.files.map((file) => [file.name, file]))
+  const nextFiles = new Map(snapshot.files.map((file) => [file.name, file]))
+  const incomingFiles = workspaceFilesFromSnapshot(snapshot)
+  let changed = false
+  let activeDocumentUpdated = false
+  let activeCsvUpdated = false
+  let activeFileRemoved = false
+
+  for (const incoming of incomingFiles) {
+    let file = workspaceFiles.find((candidate) => candidate.name === incoming.name)
+    const knownDiskFile = previousFiles.get(incoming.name)
+    if (!file) {
+      workspaceFiles.push(incoming)
+      changed = true
+      continue
+    }
+
+    const conflict = workspaceConflicts.get(file.id)
+    const diskChanged = !knownDiskFile || knownDiskFile.markdown !== incoming.markdown
+    if (conflict) {
+      if (diskChanged || !conflict.diskFileExists || conflict.diskMarkdown !== incoming.markdown) {
+        conflict.diskFileExists = true
+        conflict.diskMarkdown = incoming.markdown
+        renderWorkspaceConflicts(editor)
+      }
+      continue
+    }
+    if (!diskChanged) continue
+
+    if (workspaceFileHasLocalEdits(editor, file)) {
+      setWorkspaceConflict(file, true, incoming.markdown)
+      changed = true
+      continue
+    }
+
+    file.markdown = incoming.markdown
+    cleanMarkdownByFile.set(file.id, incoming.markdown)
+    dirtyDiskFiles.delete(file.id)
+    changed = true
+    if (activeFile()?.id === file.id) {
+      if (file.kind === 'markdown') {
+        loadMarkdown(editor, incoming.markdown, { focus: false })
+        cleanMarkdownByFile.set(file.id, getMarkdown(editor))
+        activeDocumentUpdated = true
+      } else if (file.kind === 'csv') {
+        activeCsvUpdated = true
+      }
+    }
+    if (file.kind === 'css' && activeThemeSource?.origin === 'workspace'
+      && activeThemeSource.id === file.id) {
+      applyCssFile(file)
+    }
+  }
+
+  for (const file of [...workspaceFiles]) {
+    if (file.source !== 'disk' || nextFiles.has(file.name)) continue
+    const conflict = workspaceConflicts.get(file.id)
+    if (conflict) {
+      conflict.diskFileExists = false
+      conflict.diskMarkdown = undefined
+      renderWorkspaceConflicts(editor)
+      continue
+    }
+    if (workspaceFileHasLocalEdits(editor, file)) {
+      setWorkspaceConflict(file, false)
+      changed = true
+      continue
+    }
+    if (activeFile()?.id === file.id) activeFileRemoved = true
+    workspaceFiles.splice(workspaceFiles.indexOf(file), 1)
+    dirtyDiskFiles.delete(file.id)
+    cleanMarkdownByFile.delete(file.id)
+    changed = true
+  }
+
+  workspaceDirectories.splice(
+    0,
+    workspaceDirectories.length,
+    ...snapshot.directories,
+  )
+  workspaceDirectories.sort((left, right) => left.localeCompare(right))
+  workspaceFiles.sort((left, right) => left.name.localeCompare(right.name))
+
+  if (activeFileRemoved) activateAvailableWorkspaceFile(editor)
+  else if (activeCsvUpdated) {
+    activeCsvFileId = undefined
+    destroyCsvEditor()
+    const file = activeFile()
+    if (file?.kind === 'csv') openCsvFile(file)
+  }
+
+  if (folderStatus) {
+    folderStatus.textContent = snapshot.files.length
+      ? `${snapshot.workspace.name} · ${snapshot.files.length} files · disk-backed`
+      : `${snapshot.workspace.name} · empty folder · disk-backed`
+    folderStatus.title = snapshot.workspace.path
+  }
+  if (changed || activeDocumentUpdated || activeCsvUpdated) {
+    renderFileList(editor)
+    persistWorkspace()
+    await refreshEvaluatedCsvSources()
+    notifyMarkdownIncludesChanged()
+    notifyMermaidCsvDataChanged()
+  }
+  if (activeDocumentUpdated || activeCsvUpdated) {
+    const file = activeFile()
+    setStatus(`${file?.name ?? 'Document'} updated externally`, 'saved')
+    if (file?.kind === 'csv') setCsvStatus(`${file.name} updated externally`, 'saved')
+  } else if (changed && workspaceConflicts.size === 0) {
+    setStatus('Workspace updated externally', 'saved')
+  }
+}
+
+const resolveWorkspaceConflict = async (
+  editor: EditorInstance,
+  fileId: string,
+  choice: 'disk' | 'local',
+) => {
+  const conflict = workspaceConflicts.get(fileId)
+  const file = workspaceFiles.find((candidate) => candidate.id === fileId)
+  if (!conflict || !file) return false
+  const localMarkdown = file.kind === 'markdown' && activeFile()?.id === file.id
+    ? getMarkdown(editor)
+    : file.markdown
+  try {
+    const previousState = workspaceApplication.state
+    const snapshot = await workspaceApplication.refresh()
+    if (previousState.workspace) {
+      await reconcileWorkspaceSnapshot(editor, {
+        workspace: previousState.workspace,
+        files: previousState.files,
+        directories: previousState.directories,
+      }, snapshot)
+    }
+    workspaceDirectories.splice(
+      0,
+      workspaceDirectories.length,
+      ...snapshot.directories,
+    )
+    const diskFile = snapshot.files.find((candidate) => candidate.name === file.name)
+    if (choice === 'local') {
+      file.markdown = localMarkdown
+      await workspaceApplication.saveFile(file.name, localMarkdown)
+      cleanMarkdownByFile.set(file.id, localMarkdown)
+      dirtyDiskFiles.delete(file.id)
+      workspaceConflicts.delete(fileId)
+      setStatus(`Kept your version of ${file.name}`, 'saved')
+    } else if (diskFile) {
+      file.markdown = file.kind === 'markdown'
+        ? normalizeMarkdownBreaks(diskFile.markdown)
+        : diskFile.markdown
+      cleanMarkdownByFile.set(file.id, file.markdown)
+      dirtyDiskFiles.delete(file.id)
+      workspaceConflicts.delete(fileId)
+      if (activeFile()?.id === file.id) {
+        if (file.kind === 'markdown') loadMarkdown(editor, file.markdown, { focus: false })
+        else if (file.kind === 'csv') {
+          activeCsvFileId = undefined
+          destroyCsvEditor()
+          openCsvFile(file)
+        }
+      }
+      setStatus(`Loaded the disk version of ${file.name}`, 'saved')
+    } else {
+      const wasActive = activeFile()?.id === file.id
+      workspaceFiles.splice(workspaceFiles.indexOf(file), 1)
+      dirtyDiskFiles.delete(file.id)
+      cleanMarkdownByFile.delete(file.id)
+      workspaceConflicts.delete(fileId)
+      if (wasActive) activateAvailableWorkspaceFile(editor)
+      setStatus(`Closed removed file ${file.name}`, 'saved')
+    }
+    renderWorkspaceConflicts(editor)
+    renderFileList(editor)
+    persistWorkspace()
+    await refreshEvaluatedCsvSources()
+    notifyMarkdownIncludesChanged()
+    notifyMermaidCsvDataChanged()
+    return true
+  } catch (error) {
+    if (error instanceof WorkspaceFileConflictError) {
+      setWorkspaceConflict(file, error.diskFileExists, error.diskContents)
+      return false
+    }
+    const message = error instanceof Error ? error.message : `Could not resolve ${file.name}.`
+    setStatus(message, 'ready')
+    setCsvStatus(message, 'ready')
+    return false
+  }
+}
+
+let workspaceRefreshTimer: number | undefined
+let workspaceRefreshPending = false
+let monitoredWorkspaceEditor: EditorInstance | undefined
+
+const refreshWorkspaceInBackground = async (editor: EditorInstance) => {
+  if (document.visibilityState !== 'visible' || workspaceRefreshPending) return
+  const previousState = workspaceApplication.state
+  if (!previousState.workspace) return
+  workspaceRefreshPending = true
+  try {
+    const snapshot = await workspaceApplication.refresh()
+    await reconcileWorkspaceSnapshot(editor, {
+      workspace: previousState.workspace,
+      files: previousState.files,
+      directories: previousState.directories,
+    }, snapshot)
+  } catch (error) {
+    console.warn('Could not refresh the open workspace.', error)
+  } finally {
+    workspaceRefreshPending = false
+  }
+}
+
+const startWorkspaceMonitoring = (editor: EditorInstance) => {
+  if (monitoredWorkspaceEditor === editor) return
+  monitoredWorkspaceEditor = editor
+  const refresh = () => { void refreshWorkspaceInBackground(editor) }
+  workspaceRefreshTimer = window.setInterval(refresh, 1_500)
+  window.addEventListener('focus', refresh)
+  document.addEventListener('visibilitychange', refresh)
+  window.addEventListener('beforeunload', () => {
+    if (workspaceRefreshTimer !== undefined) window.clearInterval(workspaceRefreshTimer)
+  }, { once: true })
+}
+
 const loadStyleFolderFromSnapshot = async (snapshot: {
   folder: StyleFolderInfo
   files: StyleFileSnapshot[]
@@ -2992,39 +3359,25 @@ const loadStyleFolderFromSnapshot = async (snapshot: {
   return styleFolderFiles.length
 }
 
-const openStyleFolder = async () => {
+const openManagedStylesFolder = async () => {
   if (!styleFolderApplication) return false
   try {
-    setStatus('Selecting style folder…', 'saving')
-    const snapshot = await styleFolderApplication.open()
-    if (!snapshot) {
-      setStatus('Style-folder selection cancelled', 'ready')
-      updateStyleFolderStatus()
-      return false
-    }
-    await loadStyleFolderFromSnapshot(snapshot)
-    setStatus(
-      styleFolderFiles.length
-        ? `Loaded ${styleFolderInfo?.name ?? 'style folder'}`
-        : `Loaded empty style folder ${styleFolderInfo?.name ?? ''}`.trim(),
-      'saved',
-    )
+    await styleFolderApplication.openFolder()
+    setStatus('Opened the styles folder in the file manager', 'saved')
     return true
   } catch (error) {
-    console.error('Could not open the style folder.', error)
+    console.error('Could not open the styles folder.', error)
     const message = error instanceof Error
       ? error.message
-      : 'Style-folder access failed. Select the folder again.'
+      : 'Could not open the styles folder.'
     setStatus(message, 'ready')
     updateStyleFolderStatus()
     return false
   }
 }
 
-// Bind this independent action before the asynchronous editor initialization
-// finishes so the folder control is usable as soon as it is visible.
 openStyleFolderButton?.addEventListener('click', () => {
-  void runWorkspaceAction(openStyleFolder)
+  void runWorkspaceAction(openManagedStylesFolder)
 })
 
 const restoreStyleFolder = async () => {
@@ -3038,20 +3391,21 @@ const restoreStyleFolder = async () => {
     await loadStyleFolderFromSnapshot(snapshot)
     return true
   } catch (error) {
-    console.warn('Could not restore the previous style folder.', error)
-    clearStyleFolderState('Style folder unavailable · select it again')
+    console.warn('Could not open the app-managed styles folder.', error)
+    clearStyleFolderState()
     return false
   }
 }
 
 const reloadStyleFolder = async () => {
-  if (!styleFolderApplication || !styleFolderInfo) return true
+  if (!styleFolderApplication) return false
+  if (!styleFolderInfo) return restoreStyleFolder()
   try {
     await loadStyleFolderFromSnapshot(await styleFolderApplication.reload())
     return true
   } catch (error) {
     console.warn('Could not reload the style folder.', error)
-    clearStyleFolderState('Style folder unavailable · select it again')
+    setStatus('Could not refresh styles; the last available themes are still in use', 'ready')
     return false
   }
 }
@@ -3200,6 +3554,8 @@ const startEditor = async () => {
           const file = activeFile()
           if (file) {
             file.markdown = markdown
+            const conflict = workspaceConflicts.get(file.id)
+            if (conflict) conflict.localMarkdown = markdown
             if (isDiskBackedFile(file) && !isLoadingMarkdown) {
               const clean = cleanMarkdownByFile.get(file.id)
               if (clean === undefined || markdown !== clean) {
@@ -3258,8 +3614,13 @@ const startEditor = async () => {
   renderStyleChoices()
   updateStyleFolderStatus()
   renderPageFormatOptions()
+  renderWorkspaceConflicts(editor)
   setDebugMarkdown(getMarkdown(editor))
   scheduleOutlineUpdate(editor)
+  startWorkspaceMonitoring(editor)
+  if (isElectronRuntime) {
+    window.addEventListener('focus', () => { void reloadStyleFolder() })
+  }
 
   let debugRenderTimer: number | undefined
   let debugSourceComposing = false
