@@ -23,8 +23,12 @@ describe('Electron update bridge contract', () => {
     expect(main).not.toContain('updateService.start()')
   })
 
-  it('preserves workspace and style-folder bridges in the editor preload', () => {
-    expect(editorPreload).toContain("contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder })")
+  it('preserves workspace and style-folder bridges and exposes share archive actions', () => {
+    expect(editorPreload).toContain("contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder, share })")
+    expect(editorPreload).toContain("openArchive: () => invoke<Uint8Array | undefined>(shareChannels.openArchive)")
+    expect(editorPreload).toContain("saveArchive: (bytes, suggestedName) => invoke<string | undefined>(")
+    expect(main).toContain('ELECTRON_SHARE_CHANNELS.openArchive')
+    expect(main).toContain('ELECTRON_SHARE_CHANNELS.saveArchive')
     expect(main).toContain('ELECTRON_WORKSPACE_CHANNELS.open')
     expect(main).toContain('ELECTRON_WORKSPACE_CHANNELS.deleteDirectory')
     expect(main).toContain('ELECTRON_STYLE_FOLDER_CHANNELS.open')

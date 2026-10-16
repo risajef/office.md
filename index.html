@@ -21,10 +21,12 @@
             <div class="startup-choice-actions">
               <button class="startup-choice-primary" id="startup-open-folder" type="button" disabled>Open folder</button>
               <button class="startup-choice-secondary" id="startup-open-file" type="button" disabled>Open file</button>
+              <button class="startup-choice-secondary" id="startup-open-share-zip" type="button" hidden>Open share ZIP</button>
             </div>
             <p class="startup-choice-status" id="startup-status" aria-live="polite"></p>
           </div>
         </section>
+        <dialog id="share-dialog" class="share-dialog" aria-labelledby="share-dialog-title"></dialog>
         <div class="workspace-layout" id="workspace-layout" hidden>
           <aside class="outline-sidebar" id="outline-sidebar" aria-label="Document outline">
             <section class="sidebar-section outline-section">
@@ -135,12 +137,40 @@
               ></button>
               <button
                 class="copy-button"
+                id="open-share-zip"
+                type="button"
+                title="Open share ZIP"
+                data-tooltip="Open share ZIP"
+                data-icon="folder"
+                aria-label="Open share ZIP"
+                hidden
+              ></button>
+              <button
+                class="copy-button"
                 data-file-export
                 type="button"
                 title="Export file"
                 data-tooltip="Export file"
                 data-icon="download"
                 aria-label="Export file"
+              ></button>
+              <button
+                class="copy-button"
+                id="share-file"
+                type="button"
+                title="Share this file"
+                data-tooltip="Share this file"
+                data-icon="link"
+                aria-label="Share this file"
+              ></button>
+              <button
+                class="copy-button"
+                id="share-workspace"
+                type="button"
+                title="Share workspace"
+                data-tooltip="Share workspace"
+                data-icon="folder"
+                aria-label="Share workspace"
               ></button>
               <button
                 class="copy-button"
@@ -211,12 +241,40 @@
                   ></button>
                   <button
                     class="copy-button"
+                    id="csv-open-share-zip"
+                    type="button"
+                    title="Open share ZIP"
+                    data-tooltip="Open share ZIP"
+                    data-icon="folder"
+                    aria-label="Open share ZIP"
+                    hidden
+                  ></button>
+                  <button
+                    class="copy-button"
                     data-file-export
                     type="button"
                     title="Export evaluated CSV"
                     data-tooltip="Export evaluated CSV"
                     data-icon="download"
                     aria-label="Export evaluated CSV"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    id="csv-share-file"
+                    type="button"
+                    title="Share this file"
+                    data-tooltip="Share this file"
+                    data-icon="link"
+                    aria-label="Share this file"
+                  ></button>
+                  <button
+                    class="copy-button"
+                    id="csv-share-workspace"
+                    type="button"
+                    title="Share workspace"
+                    data-tooltip="Share workspace"
+                    data-icon="folder"
+                    aria-label="Share workspace"
                   ></button>
                   <button
                     class="copy-button"

@@ -4,6 +4,14 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import os from 'node:os'
 import path from 'node:path'
 import { _electron as electron, expect, test, type Page } from '@playwright/test'
+import {
+  TextReader,
+  TextWriter,
+  Uint8ArrayReader,
+  Uint8ArrayWriter,
+  ZipReader,
+  ZipWriter,
+} from '@zip.js/zip.js'
 import { writeRepresentativeWorkspace } from '../fixtures/representative-workspace'
 
 const electronPath = process.env.ELECTRON_PATH
@@ -49,6 +57,23 @@ const openTestWorkspace = async (page: Page) => {
   await expect(page.locator('#startup-open-folder')).toBeEnabled({ timeout: 30_000 })
   await page.locator('#startup-open-folder').click()
   await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 30_000 })
+}
+
+const createProtectedTestShare = async () => {
+  const writer = new ZipWriter(new Uint8ArrayWriter())
+  const passwordOptions = { password: 'incoming passphrase', encryptionStrength: 3 as const }
+  const manifest = {
+    format: 'office-md-share-archive',
+    version: 1,
+    id: 'electron-main-process-share',
+    kind: 'file',
+    createdAt: new Date().toISOString(),
+    entryFile: 'document.md',
+    files: [{ path: 'document.md', mimeType: 'text/markdown', encoding: 'utf8' }],
+  }
+  await writer.add('.office-md-share.json', new TextReader(JSON.stringify(manifest)), passwordOptions)
+  await writer.add('document.md', new TextReader('# Real Electron share\n'), passwordOptions)
+  return writer.close()
 }
 
 test('Electron shell loads the shared renderer and secure workspace bridge', async () => {
@@ -120,6 +145,83 @@ test('Electron opens a selected Markdown file with its immediate parent workspac
     await application?.close()
     virtualDisplay?.process.kill()
     await rm(workspace, { recursive: true, force: true })
+    await rm(userData, { recursive: true, force: true })
+  }
+})
+
+test('Electron opens and saves a password-protected share through its main-process bridge', async () => {
+  test.skip(!existsSync(electronPath), 'Electron binary is not installed.')
+  test.skip(needsXvfb && !existsSync('/usr/bin/Xvfb'), 'Xvfb is not installed.')
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-share-'))
+  const userData = await mkdtemp(path.join(os.tmpdir(), 'office-md-electron-share-user-'))
+  const archivePath = path.join(directory, 'incoming.zip')
+  const savedPath = path.join(directory, 'outgoing.zip')
+  const sourceArchive = await createProtectedTestShare()
+  await writeFile(archivePath, sourceArchive)
+  const environment = { ...process.env }
+  delete environment.ELECTRON_RUN_AS_NODE
+  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_TEST_SHARE_ARCHIVE = archivePath
+  environment.OFFICE_MD_TEST_SHARE_SAVE_PATH = savedPath
+  const virtualDisplay = needsXvfb ? await startXvfb() : undefined
+  if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
+  let application: Awaited<ReturnType<typeof electron.launch>> | undefined
+
+  try {
+    application = await electron.launch({
+      executablePath: electronPath,
+      args: [process.cwd(), `--user-data-dir=${userData}`],
+      env: environment,
+    })
+    const page = application.windows()[0] ?? await application.firstWindow()
+    await expect(page.locator('#startup-open-share-zip')).toBeVisible({ timeout: 30_000 })
+    await page.locator('#startup-open-share-zip').click()
+    await expect(page.locator('#share-dialog')).toContainText('Enter the password supplied by the sender')
+    await page.locator('#share-password').fill('incoming passphrase')
+    await page.locator('#share-confirm').click()
+    await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#document-name')).toHaveText('document.md')
+
+    const updatedMarkdown = '# Edited in Electron\n'
+    await page.locator('#debug-markdown-content').fill(updatedMarkdown)
+    await page.locator('#debug-markdown-content').press('Control+Enter')
+    await expect(page.locator('#debug-markdown-content')).toHaveValue(updatedMarkdown)
+    await page.locator('#share-file').click()
+    await page.locator('#share-password-toggle').check()
+    await page.locator('#share-password').fill('outgoing passphrase')
+    await page.locator('#share-password-confirm').fill('outgoing passphrase')
+    await page.locator('#share-confirm').click()
+    await expect.poll(() => existsSync(savedPath)).toBe(true)
+    await expect(page.locator('#save-status')).toHaveAttribute('title', /Saved share ZIP/)
+
+    const reader = new ZipReader(new Uint8ArrayReader(
+      new Uint8Array(await readFile(savedPath)),
+    ))
+    const entries = await reader.getEntries()
+    const manifestEntry = entries.find((entry) => entry.filename === '.office-md-share.json')
+    const markdownEntry = entries.find((entry) => entry.filename === 'document.md')
+    expect(manifestEntry?.encrypted).toBe(true)
+    expect(markdownEntry?.encrypted).toBe(true)
+    const manifestText = await manifestEntry?.getData(new TextWriter(), {
+      password: 'outgoing passphrase',
+      checkAuthenticationCode: true,
+      checkCrc32: true,
+    })
+    const markdown = await markdownEntry?.getData(new TextWriter(), {
+      password: 'outgoing passphrase',
+      checkAuthenticationCode: true,
+      checkCrc32: true,
+    })
+    await reader.close()
+    expect(JSON.parse(manifestText ?? '{}')).toMatchObject({ kind: 'file', entryFile: 'document.md' })
+    expect(JSON.parse(manifestText ?? '{}').id).not.toBe('electron-main-process-share')
+    expect(markdown).toBe(updatedMarkdown)
+    expect(await readFile(archivePath)).toEqual(Buffer.from(sourceArchive))
+  } finally {
+    await application?.close()
+    virtualDisplay?.process.kill()
+    await rm(directory, { recursive: true, force: true })
     await rm(userData, { recursive: true, force: true })
   }
 })

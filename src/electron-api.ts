@@ -47,6 +47,16 @@ export const ELECTRON_STYLE_FOLDER_CHANNELS = {
   openFolder: 'style-folder:open-folder',
 } as const
 
+export const ELECTRON_SHARE_CHANNELS = {
+  openArchive: 'share:open-archive',
+  saveArchive: 'share:save-archive',
+} as const
+
+export type ElectronShareApi = {
+  openArchive: () => Promise<Uint8Array | undefined>
+  saveArchive: (bytes: Uint8Array, suggestedName: string) => Promise<string | undefined>
+}
+
 export type ElectronStyleFolderApi = {
   restore: () => Promise<StyleFolderSnapshot | undefined>
   reload: (folderId: string) => Promise<StyleFolderSnapshot>
@@ -59,6 +69,7 @@ declare global {
     officeMd?: {
       workspace?: ElectronWorkspaceApi
       styleFolder?: ElectronStyleFolderApi
+      share?: ElectronShareApi
     }
   }
 }

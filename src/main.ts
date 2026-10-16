@@ -77,6 +77,20 @@ import {
 import { CsvContextToolbar } from './csv-context-toolbar'
 import { requestChoice } from './choice-dialog'
 import { createPortableMarkdown } from './portable-markdown'
+import { createShareArchive, openShareArchive } from './share-archive'
+import { createShareId, type SharePayload } from './share-document'
+import {
+  collectWorkspaceSharePayload,
+  createCurrentFileSharePayload,
+} from './share-workspace'
+import {
+  confirmLongShareUrl,
+  requestShareOptions,
+  requestSharePassword,
+  showShareLink,
+} from './share-dialog'
+import { createDefaultShareCopyRepository } from './share-copy-store'
+import { createShareUrl, decodeShareUrl } from './share-url'
 import {
   createDocumentExportHtml,
   printDocumentHtml,
@@ -258,6 +272,15 @@ const startupOpenFolderButton = document.querySelector<HTMLButtonElement>(
 const startupOpenFileButton = document.querySelector<HTMLButtonElement>(
   '#startup-open-file',
 )
+const startupOpenShareZipButton = document.querySelector<HTMLButtonElement>(
+  '#startup-open-share-zip',
+)
+const shareFileButton = document.querySelector<HTMLButtonElement>('#share-file')
+const csvShareFileButton = document.querySelector<HTMLButtonElement>('#csv-share-file')
+const shareWorkspaceButton = document.querySelector<HTMLButtonElement>('#share-workspace')
+const csvShareWorkspaceButton = document.querySelector<HTMLButtonElement>('#csv-share-workspace')
+const openShareZipButton = document.querySelector<HTMLButtonElement>('#open-share-zip')
+const csvOpenShareZipButton = document.querySelector<HTMLButtonElement>('#csv-open-share-zip')
 const startupStatus = document.querySelector<HTMLElement>('#startup-status')
 const outlineToggle = document.querySelector<HTMLButtonElement>('#toggle-outline')
 const filesToggle = document.querySelector<HTMLButtonElement>('#toggle-files')
@@ -500,7 +523,8 @@ type WorkspaceFile = {
   name: string
   markdown: string
   kind: 'markdown' | 'css' | 'csv' | 'image'
-  source?: 'browser' | 'disk'
+  source?: 'browser' | 'disk' | 'shared'
+  binaryContent?: string
 }
 
 type WorkspaceConflict = {
@@ -629,6 +653,11 @@ const readWorkspaceFiles = (): WorkspaceFile[] => {
 const workspaceFiles = readWorkspaceFiles()
 const workspaceDirectories: string[] = []
 const imageObjectUrls = new Map<string, string>()
+const shareCopyRepository = createDefaultShareCopyRepository()
+let activeShareCopyId: string | undefined
+let activeShareWorkspaceName = 'Shared workspace'
+let shareCopyPersistenceUnavailable = false
+let shareCopyPersistTimer: number | undefined
 const editorRuntime = createEditorRuntime(
   createRuntimeWorkspacePort(),
   createRuntimeStyleFolderPort(),
@@ -636,6 +665,11 @@ const editorRuntime = createEditorRuntime(
 const workspaceApplication = editorRuntime.workspace
 const styleFolderApplication = editorRuntime.styleFolder
 const isElectronRuntime = editorRuntime.styleFolderPort?.host === 'electron'
+if (isElectronRuntime) {
+  if (startupOpenShareZipButton) startupOpenShareZipButton.hidden = false
+  if (openShareZipButton) openShareZipButton.hidden = false
+  if (csvOpenShareZipButton) csvOpenShareZipButton.hidden = false
+}
 const openStyleFolderButton = isElectronRuntime
   ? document.createElement('button')
   : undefined
@@ -681,6 +715,13 @@ const runWorkspaceAction = async (action: () => Promise<unknown>) => {
     openFolderButton,
     startupOpenFolderButton,
     startupOpenFileButton,
+    startupOpenShareZipButton,
+    openShareZipButton,
+    csvOpenShareZipButton,
+    shareFileButton,
+    csvShareFileButton,
+    shareWorkspaceButton,
+    csvShareWorkspaceButton,
     openStyleFolderButton,
     newFileButton,
     newFolderButton,
@@ -723,6 +764,62 @@ const workspaceFilesFromSnapshot = (
     source: 'disk',
   }
 })
+
+const base64ToBytes = (value: string) => {
+  const binary = atob(value)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+const collectCurrentShareWorkspace = (id: string) => collectWorkspaceSharePayload({
+  id,
+  name: activeShareWorkspaceName,
+  files: workspaceFiles.map(({ name, markdown, kind }) => ({ name, markdown, kind })),
+  async readImage(name) {
+    const file = workspaceFiles.find((candidate) => candidate.name === name)
+    if (file?.binaryContent) return base64ToBytes(file.binaryContent)
+    const url = await workspaceApplication.readAssetUrl(name)
+    if (!url) return undefined
+    const response = await fetch(url)
+    if (!response.ok) return undefined
+    return new Uint8Array(await response.arrayBuffer())
+  },
+})
+
+const persistActiveShareCopy = async () => {
+  if (!activeShareCopyId || !workspaceFiles.length) return false
+  if (shareCopyPersistTimer !== undefined) {
+    window.clearTimeout(shareCopyPersistTimer)
+    shareCopyPersistTimer = undefined
+  }
+  const payload = await collectCurrentShareWorkspace(activeShareCopyId)
+  const result = await shareCopyRepository.put(payload)
+  shareCopyPersistenceUnavailable = !result.persistent
+  if (folderStatus) {
+    folderStatus.textContent = result.persistent
+      ? `${activeShareWorkspaceName} · separate shared copy saved locally`
+      : `${activeShareWorkspaceName} · browser storage unavailable; share or export before closing`
+  }
+  if (!result.persistent) {
+    setStatus('This shared copy is only available in this tab. Share or export it before closing.', 'ready')
+  }
+  return result.persistent
+}
+
+const scheduleShareCopyPersistence = () => {
+  if (!activeShareCopyId) return
+  if (shareCopyPersistTimer !== undefined) window.clearTimeout(shareCopyPersistTimer)
+  shareCopyPersistTimer = window.setTimeout(() => {
+    shareCopyPersistTimer = undefined
+    void persistActiveShareCopy().catch((error: unknown) => {
+      shareCopyPersistenceUnavailable = true
+      const message = error instanceof Error ? error.message : 'Shared copy storage failed.'
+      if (folderStatus) {
+        folderStatus.textContent = `${activeShareWorkspaceName} · storage failed; share or export before closing`
+      }
+      setStatus(message, 'ready')
+    })
+  }, 350)
+}
 
 const replaceWorkspaceFiles = (
   files: WorkspaceFile[],
@@ -827,6 +924,9 @@ const resolveWorkspaceImageSource = async (source: string) => {
   const reference = workspaceImageReference(source)
   if (!reference) return undefined
   const { file, suffix } = reference
+  if (file.source === 'shared' && file.binaryContent) {
+    return `data:${imageMimeType(file.name)};base64,${file.binaryContent}${suffix}`
+  }
   if (file.source !== 'disk') return undefined
   let objectUrl = imageObjectUrls.get(file.id)
   if (!objectUrl) {
@@ -843,6 +943,10 @@ configureMarkdownIncludes(resolveWorkspaceInclude)
 configureMermaidCsvResolver(resolveWorkspaceCsv)
 
 const persistWorkspace = () => {
+  if (activeShareCopyId) {
+    scheduleShareCopyPersistence()
+    return
+  }
   if (!workspaceCacheUnavailable) {
     const persistedFiles = workspaceFiles.map((file) => ({ ...file }))
     const serializedFiles = JSON.stringify(persistedFiles)
@@ -888,6 +992,13 @@ const updateDocumentNameControls = (file = activeFile()) => {
     control.title = label
     control.dataset.tooltip = label
     control.setAttribute('aria-label', label)
+  }
+  const canShareFile = Boolean(file && (file.kind === 'markdown' || file.kind === 'csv'))
+  for (const button of [shareFileButton, csvShareFileButton]) {
+    if (button) button.disabled = !canShareFile
+  }
+  for (const button of [shareWorkspaceButton, csvShareWorkspaceButton]) {
+    if (button) button.disabled = workspaceFiles.length === 0
   }
 }
 
@@ -2310,8 +2421,8 @@ const scheduleCsvAutoSave = (file: WorkspaceFile) => {
           setStatus('Stored on disk', 'saved')
         }
       } else {
-        setCsvStatus('Saved in browser storage', 'saved')
-        setStatus('Saved in browser storage', 'saved')
+        setCsvStatus(activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage', 'saved')
+        setStatus(activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage', 'saved')
       }
     })()
     csvSaveOperation = operation
@@ -3036,6 +3147,12 @@ const loadWorkspaceFromSnapshot = async (
     preferredFileName?: string
   } = {},
 ) => {
+  if (activeShareCopyId) {
+    await persistActiveShareCopy()
+    activeShareCopyId = undefined
+    activeShareWorkspaceName = 'Shared workspace'
+    shareCopyPersistenceUnavailable = false
+  }
   dirtyDiskFiles.clear()
   cleanMarkdownByFile.clear()
   workspaceConflicts.clear()
@@ -3303,7 +3420,7 @@ let workspaceRefreshPending = false
 let monitoredWorkspaceEditor: EditorInstance | undefined
 
 const refreshWorkspaceInBackground = async (editor: EditorInstance) => {
-  if (document.visibilityState !== 'visible' || workspaceRefreshPending) return
+  if (activeShareCopyId || document.visibilityState !== 'visible' || workspaceRefreshPending) return
   const previousState = workspaceApplication.state
   if (!previousState.workspace) return
   workspaceRefreshPending = true
@@ -3475,19 +3592,217 @@ const openLocalFile = async (editor: EditorInstance) => {
   }
 }
 
+const directoryNamesForFiles = (files: string[]) => {
+  const directories = new Set<string>()
+  for (const file of files) {
+    const parts = file.split('/')
+    parts.pop()
+    for (let index = 1; index <= parts.length; index += 1) {
+      directories.add(parts.slice(0, index).join('/'))
+    }
+  }
+  return [...directories].sort((left, right) => left.localeCompare(right))
+}
+
+const loadSharedCopy = async (
+  payload: SharePayload,
+  editor?: EditorInstance,
+  preferredFileName = payload.kind === 'file' ? payload.entryFile : undefined,
+) => {
+  if (editor && activeCsvWorksheet) destroyCsvEditor()
+  activeCsvFileId = undefined
+  activeShareCopyId = payload.id
+  activeShareWorkspaceName = payload.workspaceName ??
+    payload.entryFile?.split('/').at(-1) ?? 'Shared workspace'
+  shareCopyPersistenceUnavailable = false
+  const files: WorkspaceFile[] = payload.files.map((file) => ({
+    id: `shared:${payload.id}:${file.path}`,
+    name: file.path,
+    markdown: file.encoding === 'utf8' ? file.content : '',
+    kind: workspaceKindForName(file.path),
+    source: 'shared',
+    ...(file.encoding === 'base64' ? { binaryContent: file.content } : {}),
+  }))
+  lastMarkdownFileId = files.find((file) => file.kind === 'markdown')?.id
+  replaceWorkspaceFiles(
+    files,
+    preferredFileName,
+    directoryNamesForFiles(files.map((file) => file.name)),
+  )
+  if (startupChoice) startupChoice.hidden = true
+  if (workspaceLayout) workspaceLayout.hidden = false
+  if (folderStatus) {
+    folderStatus.textContent = `${activeShareWorkspaceName} · opening separate shared copy`
+  }
+  if (editor) {
+    activateWorkspaceFile(editor)
+    renderFileList(editor)
+  }
+  await persistActiveShareCopy()
+}
+
+const openIncomingWebShare = async () => {
+  if (isElectronRuntime) return true
+  const fragment = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash
+  if (!new URLSearchParams(fragment).has('share')) return true
+
+  try {
+    let decoded
+    try {
+      decoded = await decodeShareUrl(window.location.href)
+    } catch (error) {
+      if (!(error instanceof Error) || !/requires a password/i.test(error.message)) throw error
+      const password = await requestSharePassword()
+      if (!password) throw new Error('A password is required to open this share.')
+      decoded = await decodeShareUrl(window.location.href, { password })
+    }
+    if (!decoded) throw new Error('The share link does not contain a document.')
+    const previousCopy = await shareCopyRepository.get(decoded.payload.id)
+    const payload = previousCopy ?? decoded.payload
+    await loadSharedCopy(
+      payload,
+      undefined,
+      decoded.payload.kind === 'file' ? decoded.payload.entryFile : undefined,
+    )
+    if (folderStatus && !shareCopyPersistenceUnavailable) {
+      folderStatus.textContent = `${activeShareWorkspaceName} · separate shared copy saved locally`
+    }
+    setStatus('Opened an isolated shared copy', 'saved')
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not open this share.'
+    const heading = startupChoice?.querySelector('h1')
+    if (heading) heading.textContent = 'Could not open this shared document'
+    if (startupStatus) startupStatus.textContent = message
+    if (startupOpenFolderButton) startupOpenFolderButton.disabled = true
+    if (startupOpenFileButton) startupOpenFileButton.disabled = true
+    setStatus(message, 'ready')
+    return false
+  }
+}
+
+const openShareArchiveFromPicker = async (editor: EditorInstance) => {
+  const api = window.officeMd?.share
+  if (!api) throw new Error('The Electron share archive bridge is unavailable.')
+  const bytes = await api.openArchive()
+  if (!bytes) return false
+  let payload: SharePayload
+  try {
+    payload = await openShareArchive(bytes)
+  } catch (error) {
+    if (!(error instanceof Error) || !/requires a password/i.test(error.message)) throw error
+    const password = await requestSharePassword('Open password-protected ZIP')
+    if (!password) throw new Error('A password is required to open this ZIP share.')
+    payload = await openShareArchive(bytes, { password })
+  }
+  const previousCopy = await shareCopyRepository.get(payload.id)
+  await loadSharedCopy(previousCopy ?? payload, editor)
+  setStatus('Opened an isolated copy from the share ZIP', 'saved')
+  return true
+}
+
+const shareCurrentDocument = async (
+  editor: EditorInstance,
+  kind: 'file' | 'workspace',
+) => {
+  try {
+    const csv = workspaceFiles.find((file) => file.id === activeCsvFileId)
+    if (csv?.kind === 'csv' && activeCsvWorksheet) {
+      syncCsvFile(csv, activeCsvWorksheet, false)
+    }
+    const active = activeFile()
+    if (active?.kind === 'markdown' && activeFile()?.id === active.id) {
+      active.markdown = getMarkdown(editor)
+    }
+    await refreshEvaluatedCsvSources()
+    const id = createShareId()
+    let payload: SharePayload
+    if (kind === 'file') {
+      if (!active || !['markdown', 'csv'].includes(active.kind)) {
+        throw new Error('Select a Markdown or CSV file to share it.')
+      }
+      payload = createCurrentFileSharePayload({
+        id,
+        file: { name: active.name, markdown: active.markdown, kind: active.kind },
+        ...(active.kind === 'markdown' ? { portableMarkdown: portableMarkdownFor(active) } : {}),
+      })
+    } else {
+      const workspaceName = workspaceApplication.state.workspace?.name ??
+        activeShareWorkspaceName
+      payload = await collectCurrentShareWorkspace(id)
+      if (workspaceApplication.state.workspace) {
+        payload = { ...payload, workspaceName }
+      }
+    }
+
+    const isElectronShare = isElectronRuntime
+    const options = await requestShareOptions({
+      title: kind === 'file' ? 'Share file' : 'Share workspace',
+      description: isElectronShare
+        ? 'Anyone with the ZIP can open this editable copy unless you protect it with a password.'
+        : kind === 'file'
+          ? 'Anyone with the link can open this editable copy. Markdown includes are made portable; CSV shares keep their formulas.'
+          : 'Anyone with the link can open every listed file as an editable copy.',
+      ...(kind === 'workspace' ? { files: payload.files.map((file) => file.path) } : {}),
+      includeArchiveManifest: isElectronShare,
+      passwordLabel: isElectronShare ? 'Protect ZIP with a password' : 'Protect link with a password',
+      passwordAvailable: isElectronShare ||
+        (window.isSecureContext && Boolean(window.crypto?.subtle)),
+      passwordUnavailableMessage: 'Password-protected links require HTTPS or localhost with Web Crypto.',
+    })
+    if (!options) return false
+
+    if (isElectronShare) {
+      const archive = await createShareArchive(payload, { password: options.password })
+      const savedPath = await window.officeMd?.share?.saveArchive(
+        archive,
+        `office-md-${kind}-share.zip`,
+      )
+      if (!savedPath) {
+        setStatus('ZIP save cancelled', 'ready')
+        return false
+      }
+      setStatus(`Saved share ZIP to ${savedPath}`, 'saved')
+      return true
+    }
+
+    const encoded = await createShareUrl(payload, {
+      baseUrl: window.location.href,
+      password: options.password,
+    })
+    if (encoded.warning && !await confirmLongShareUrl(encoded.length)) {
+      setStatus('Share cancelled', 'ready')
+      return false
+    }
+    await showShareLink(encoded.url)
+    setStatus('Share link ready', 'saved')
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not create the share.'
+    setStatus(message, 'ready')
+    if (startupStatus && startupChoice && !startupChoice.hidden) startupStatus.textContent = message
+    return false
+  }
+}
+
 const startEditor = async () => {
+  if (!await openIncomingWebShare()) return
   await restoreStyleFolder()
   const current = activeFile()
   const currentMarkdownFile =
     current?.kind === 'markdown'
       ? current
-      : workspaceFiles.find((file) => file.kind === 'markdown')
+      : activeShareCopyId
+        ? undefined
+        : workspaceFiles.find((file) => file.kind === 'markdown')
   if (currentMarkdownFile && currentMarkdownFile.id !== activeFileId) {
     activeFileId = currentMarkdownFile.id
   }
   if (currentMarkdownFile) lastMarkdownFileId = currentMarkdownFile.id
   const currentMarkdown = currentMarkdownFile?.markdown
-    ?? (workspaceApplication.state.workspace ? '' : initialMarkdown)
+    ?? (workspaceApplication.state.workspace || activeShareCopyId ? '' : initialMarkdown)
   setStatus(
     isDiskBackedFile(currentMarkdownFile)
       ? 'Loaded from disk'
@@ -3588,7 +3903,10 @@ const startEditor = async () => {
               setStatus('Stored on disk', 'saved')
             }
           } else {
-            setStatus('Saved in browser storage', 'saved')
+            setStatus(
+              activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage',
+              'saved',
+            )
           }
         },
       }),
@@ -3608,6 +3926,7 @@ const startEditor = async () => {
   )
   notifyMarkdownIncludesChanged()
   await refreshEvaluatedCsvSources()
+  if (activeShareCopyId) activateWorkspaceFile(editor)
   persistWorkspace()
   updateDocumentNameControls(currentMarkdownFile)
   renderFileList(editor)
@@ -3620,6 +3939,14 @@ const startEditor = async () => {
   startWorkspaceMonitoring(editor)
   if (isElectronRuntime) {
     window.addEventListener('focus', () => { void reloadStyleFolder() })
+  }
+  if (activeShareCopyId) {
+    setStatus(
+      shareCopyPersistenceUnavailable
+        ? 'This shared copy is only available in this tab; share or export before closing'
+        : 'Opened an isolated shared copy',
+      shareCopyPersistenceUnavailable ? 'ready' : 'saved',
+    )
   }
 
   let debugRenderTimer: number | undefined
@@ -3752,8 +4079,43 @@ const startEditor = async () => {
   startupOpenFileButton?.addEventListener('click', () => {
     void runWorkspaceAction(() => openLocalFile(editor))
   })
+  const openShareArchive = async () => {
+    try {
+      const opened = await openShareArchiveFromPicker(editor)
+      if (opened) {
+        if (startupChoice) startupChoice.hidden = true
+        if (workspaceLayout) workspaceLayout.hidden = false
+        if (startupStatus) startupStatus.textContent = ''
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not open the share ZIP.'
+      setStatus(message, 'ready')
+      if (startupStatus && startupChoice && !startupChoice.hidden) startupStatus.textContent = message
+    }
+  }
+  startupOpenShareZipButton?.addEventListener('click', () => {
+    void runWorkspaceAction(openShareArchive)
+  })
+  openShareZipButton?.addEventListener('click', () => {
+    void runWorkspaceAction(openShareArchive)
+  })
+  csvOpenShareZipButton?.addEventListener('click', () => {
+    void runWorkspaceAction(openShareArchive)
+  })
   if (startupOpenFolderButton) startupOpenFolderButton.disabled = false
   if (startupOpenFileButton) startupOpenFileButton.disabled = false
+  if (startupOpenShareZipButton && isElectronRuntime) startupOpenShareZipButton.disabled = false
+
+  const shareFile = () => {
+    void runWorkspaceAction(() => shareCurrentDocument(editor, 'file'))
+  }
+  const shareWorkspace = () => {
+    void runWorkspaceAction(() => shareCurrentDocument(editor, 'workspace'))
+  }
+  shareFileButton?.addEventListener('click', shareFile)
+  csvShareFileButton?.addEventListener('click', shareFile)
+  shareWorkspaceButton?.addEventListener('click', shareWorkspace)
+  csvShareWorkspaceButton?.addEventListener('click', shareWorkspace)
 
   const renameActiveFile = () => {
     const file = activeFile()
@@ -3810,7 +4172,9 @@ const startEditor = async () => {
   window.addEventListener('beforeunload', () => {
     if (debugRenderTimer !== undefined) flushDebugSource()
     persistActiveCsv()
-    persistWorkspace()
+    if (shareCopyPersistTimer !== undefined) window.clearTimeout(shareCopyPersistTimer)
+    if (activeShareCopyId) void persistActiveShareCopy()
+    else persistWorkspace()
     const file = activeFile()
     if (file && isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
       void saveDiskFile(file)

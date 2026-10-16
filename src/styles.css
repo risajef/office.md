@@ -2360,6 +2360,119 @@ h1 em {
   box-shadow: 0 20px 60px rgb(27 26 39 / 25%);
 }
 
+.share-dialog {
+  width: min(620px, calc(100vw - 28px));
+  max-height: min(82vh, 760px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: 0 24px 72px rgb(27 26 39 / 24%);
+}
+
+.share-dialog::backdrop {
+  background: rgb(27 26 39 / 48%);
+}
+
+.share-dialog-card {
+  display: grid;
+  gap: 12px;
+  max-height: min(82vh, 760px);
+  padding: 22px;
+  overflow: auto;
+}
+
+.share-dialog-card h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.03em;
+}
+
+.share-dialog-copy,
+.share-dialog-note,
+.share-dialog-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.share-dialog-error {
+  min-height: 1em;
+  color: #a83a36;
+}
+
+.share-file-list {
+  max-height: 250px;
+  margin: 0;
+  padding: 10px 12px 10px 30px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--page-bg);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.share-password-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.share-password-group {
+  display: grid;
+  gap: 6px;
+}
+
+.share-password-group[hidden] {
+  display: none;
+}
+
+.share-password-group label {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.share-dialog-card input[type="password"],
+#share-link-value {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--page-bg);
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.share-dialog-card input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+}
+
+.share-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.share-dialog-actions button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .source-dialog-card h2 {
   margin: 0 0 14px;
   color: var(--ink);

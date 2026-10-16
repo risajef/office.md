@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
-import { stat, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { isEditableDocumentFile } from '../src/editable-files'
 import {
+  ELECTRON_SHARE_CHANNELS,
   ELECTRON_STYLE_FOLDER_CHANNELS,
   ELECTRON_WORKSPACE_CHANNELS,
 } from '../src/electron-api'
@@ -194,6 +195,44 @@ const registerStyleFolderHandlers = () => {
   }
 }
 
+const registerShareHandlers = () => {
+  ipcMain.handle(ELECTRON_SHARE_CHANNELS.openArchive, async () => {
+    if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const testArchivePath = process.env.OFFICE_MD_TEST_SHARE_ARCHIVE
+    let selectedPath = testArchivePath
+    if (!selectedPath) {
+      const selection = await dialog.showOpenDialog(mainWindow, {
+        defaultPath: app.getPath('documents'),
+        properties: ['openFile'],
+        filters: [{ name: 'office.md share archives', extensions: ['zip'] }],
+      })
+      selectedPath = selection.filePaths[0]
+      if (selection.canceled || !selectedPath) return undefined
+    }
+    return new Uint8Array(await readFile(selectedPath))
+  })
+
+  ipcMain.handle(ELECTRON_SHARE_CHANNELS.saveArchive, async (_event, input: unknown) => {
+    if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const value = recordPayload(input)
+    if (!(value.bytes instanceof Uint8Array) || typeof value.suggestedName !== 'string') {
+      throw new Error('The share archive data is invalid.')
+    }
+    const testSavePath = process.env.OFFICE_MD_TEST_SHARE_SAVE_PATH
+    let selectedPath = testSavePath
+    if (!selectedPath) {
+      const selection = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: path.join(app.getPath('documents'), value.suggestedName),
+        filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+      })
+      selectedPath = selection.filePath
+      if (selection.canceled || !selectedPath) return undefined
+    }
+    await writeFile(selectedPath, value.bytes)
+    return selectedPath
+  })
+}
+
 const showMainMessageBox = (options: Electron.MessageBoxOptions) => mainWindow
   ? dialog.showMessageBox(mainWindow, options)
   : dialog.showMessageBox(options)
@@ -306,6 +345,7 @@ void app.whenReady().then(async () => {
   }
   registerWorkspaceHandlers()
   registerStyleFolderHandlers()
+  registerShareHandlers()
   await createWindow()
   registerHelpMenu()
   app.on('activate', async () => {

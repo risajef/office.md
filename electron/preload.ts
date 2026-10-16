@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronStyleFolderApi,
+  ElectronShareApi,
   ElectronWorkspaceApi,
 } from '../src/electron-api'
 import type { StyleFolderSnapshot } from '../src/style-folder-port'
@@ -32,6 +33,11 @@ const styleFolderChannels = {
   reload: 'style-folder:reload',
   readFile: 'style-folder:read-file',
   openFolder: 'style-folder:open-folder',
+} as const
+
+const shareChannels = {
+  openArchive: 'share:open-archive',
+  saveArchive: 'share:save-archive',
 } as const
 
 const invoke = <Result>(channel: string, payload?: unknown) =>
@@ -101,4 +107,12 @@ const styleFolder: ElectronStyleFolderApi = {
   openFolder: () => invoke<void>(styleFolderChannels.openFolder),
 }
 
-contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder })
+const share: ElectronShareApi = {
+  openArchive: () => invoke<Uint8Array | undefined>(shareChannels.openArchive),
+  saveArchive: (bytes, suggestedName) => invoke<string | undefined>(
+    shareChannels.saveArchive,
+    { bytes, suggestedName },
+  ),
+}
+
+contextBridge.exposeInMainWorld('officeMd', { workspace, styleFolder, share })
