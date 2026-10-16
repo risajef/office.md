@@ -22,6 +22,14 @@ A `![[file]]` reference that places content from another Markdown or CSV file in
 
 An editable rectangular table stored as CSV. A cell may contain a formula: the source keeps the formula while the spreadsheet can show its evaluated result.
 
+## Shared copy
+
+A Markdown document, CSV spreadsheet, or workspace opened from a share. It is an independent editable copy; edits do not change the sender's source or the link that opened it.
+
+## Shared workspace
+
+A shared copy of a workspace that keeps the included files' relative paths so Markdown includes and other workspace references can continue to work.
+
 ## CSV-linked Mermaid diagram
 
 A Mermaid diagram that names a CSV data source. Cell references and supported row or column ranges in the diagram are resolved from that source for rendering and portable export.
