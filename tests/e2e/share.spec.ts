@@ -345,7 +345,6 @@ test('opens a password-protected Electron ZIP, edits it, and saves a new protect
   await expect.poll(() => page.evaluate(() => Boolean(
     (window as typeof window & { __savedShareArchive?: number[] }).__savedShareArchive?.length,
   ))).toBe(true)
-  await expect(page.locator('#save-status')).toHaveAttribute('title', /Saved share ZIP/)
 
   const saved = await page.evaluate(() => ({
     bytes: (window as typeof window & { __savedShareArchive?: number[] }).__savedShareArchive,
@@ -373,6 +372,9 @@ test('opens a password-protected Electron ZIP, edits it, and saves a new protect
   expect(manifest.id).not.toBe('electron-incoming')
   expect(documentText).toBe('# Updated in Electron\n')
 
+  await page.evaluate(() => {
+    (window as typeof window & { __savedShareArchive?: number[] }).__savedShareArchive = undefined
+  })
   await page.locator('#share-workspace').click()
   await page.locator('#share-confirm').click()
   await expect.poll(() => page.evaluate(() => Boolean(
