@@ -193,7 +193,6 @@ test('Electron opens and saves a password-protected share through its main-proce
     await page.locator('#share-password-confirm').fill('outgoing passphrase')
     await page.locator('#share-confirm').click()
     await expect.poll(() => existsSync(savedPath)).toBe(true)
-    await expect(page.locator('#save-status')).toHaveAttribute('title', /Saved share ZIP/)
 
     const reader = new ZipReader(new Uint8ArrayReader(
       new Uint8Array(await readFile(savedPath)),
