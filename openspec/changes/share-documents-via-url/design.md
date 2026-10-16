@@ -29,7 +29,7 @@ Workspace sharing serializes all visible supported workspace files and their rel
 
 ### Use a versioned URL-fragment envelope for web shares
 
-Build a versioned share payload with a kind (`file` or `workspace`), a stable share identifier, document metadata, and file records. File records contain relative path, media type, and content. Text source is preserved as UTF-8; binary assets are represented in an encoding that can be reconstructed exactly. The payload never contains an absolute local path. For password-protected workspace links, keep all file names and contents inside ciphertext; expose only non-sensitive format metadata, a share identifier, and the data required to derive the key.
+Build a versioned share payload with a kind (`file` or `workspace`), a unique share identifier, document metadata, and file records. File records contain relative path, media type, and content. Text source is preserved as UTF-8; binary assets are represented in an encoding that can be reconstructed exactly. The payload never contains an absolute local path. Assign a new identifier for each new share so a recipient's updated share is a distinct snapshot. For password-protected workspace links, keep all file names and contents inside ciphertext; expose only non-sensitive format metadata, a share identifier, and the data required to derive the key.
 
 Create a URL from the current web app origin and path, discard unrelated query and fragment data, and store the share envelope in a `share` fragment. Read this fragment before normal workspace startup. Hosted HTTP(S) links work at the same app address; a localhost link only works for recipients who can reach that server.
 
@@ -47,9 +47,9 @@ Password links require a secure browser context (HTTPS or localhost). Plain link
 
 ### Persist received copies separately from normal workspaces
 
-A valid web share opens directly before the normal folder-or-file startup choice. Save its first decoded copy in IndexedDB, keyed by the share identifier. Reopening the same share resumes that recipient's saved copy; a different share gets a different local copy. This store is isolated from the disk-backed workspace write port, so edits cannot replace or write into an already-open workspace. If browser storage is unavailable or out of space, show that persistence failed and keep the copy available for the current session, with an option to export or share it.
+A valid web share opens directly before the normal folder-or-file startup choice. Save its first decoded copy in IndexedDB, keyed by the share identifier. Reopening the same share resumes that recipient's saved copy; a different share gets a different local copy. Keep the share actions available while editing. Sharing again snapshots the latest edits under a new share identifier, leaving the opened URL and its payload unchanged. This store is isolated from the disk-backed workspace write port, so edits cannot replace or write into an already-open workspace. If browser storage is unavailable or out of space, show that persistence failed and keep the copy available for the current session, with an option to export or share it.
 
-For Electron, opening a shared ZIP creates or resumes an isolated copy in app-managed storage separate from user-selected workspaces. The app can edit it, share it again, or export it. It can never save those edits into the ZIP file or the currently open workspace.
+For Electron, opening a shared ZIP creates or resumes an isolated copy in app-managed storage separate from user-selected workspaces. The app can edit it, share it again, or export it. Creating a new ZIP snapshots the latest edits under a new manifest identifier; it never changes the opened archive or the currently open workspace.
 
 ### Create and open Electron ZIPs
 

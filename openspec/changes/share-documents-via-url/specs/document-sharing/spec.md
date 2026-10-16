@@ -106,7 +106,7 @@ The system SHALL let the user optionally protect a web share with a password usi
 
 ### Requirement: Package Electron shares as ZIP archives
 
-In packaged Electron, the system SHALL create a ZIP archive instead of a URL. A file archive SHALL contain one portable Markdown document or formula-preserving CSV. A workspace archive SHALL preserve the relative paths and files listed in the workspace review. Every archive SHALL contain a versioned hidden manifest identifying it as an office.md shared file or workspace; the sender SHALL be told that the archive includes this metadata entry separately from the workspace content list, and the manifest SHALL NOT appear as a workspace document when the archive is opened. The system SHALL offer optional password protection for the archive. Packaged Electron SHALL open a shared ZIP directly as an isolated editable copy, requesting the password when needed. The recipient may also extract the archive with an external archive utility.
+In packaged Electron, the system SHALL create a ZIP archive instead of a URL. A file archive SHALL contain one portable Markdown document or formula-preserving CSV. A workspace archive SHALL preserve the relative paths and files listed in the workspace review. Every archive SHALL contain a versioned hidden manifest identifying it as an office.md shared file or workspace; the sender SHALL be told that the archive includes this metadata entry separately from the workspace content list, and the manifest SHALL NOT appear as a workspace document when the archive is opened. The system SHALL offer optional password protection for the archive. Packaged Electron SHALL open a shared ZIP directly as an isolated editable copy, requesting the password when needed. `Share File` SHALL remain available in an isolated Electron file copy; both share actions SHALL remain available in an isolated Electron workspace. Creating another archive SHALL include its latest edits and leave the original archive unchanged. The recipient may also extract the archive with an external archive utility.
 
 #### Scenario: Package one file in Electron
 
@@ -128,6 +128,11 @@ In packaged Electron, the system SHALL create a ZIP archive instead of a URL. A 
 - **WHEN** the user selects a ZIP with a supported office.md share manifest in packaged Electron
 - **THEN** the app reads the archive, requests its password when encrypted, and opens its document or workspace as an isolated editable copy
 
+#### Scenario: Re-share an edited Electron copy
+
+- **WHEN** the recipient edits an Electron shared copy and creates a new share archive
+- **THEN** the new archive contains the latest edits with a new share identifier and the opened archive remains unchanged
+
 #### Scenario: Open an extracted archive with an external archive utility
 
 - **WHEN** the recipient extracts a shared ZIP with an archive utility
@@ -140,7 +145,7 @@ In packaged Electron, the system SHALL create a ZIP archive instead of a URL. A 
 
 ### Requirement: Open web shares as isolated editable copies
 
-The system SHALL open a valid web share as an isolated editable file or workspace without opening, replacing, or writing to another disk-backed workspace. The system SHALL preserve each received share as a separate local browser copy across reloads. Editing SHALL NOT change the URL that opened the share or the sender's source. The recipient SHALL be able to create a new share or use supported export actions to retain changes.
+The system SHALL open a valid web share as an isolated editable file or workspace without opening, replacing, or writing to another disk-backed workspace. The system SHALL preserve each received share as a separate local browser copy across reloads. `Share File` SHALL remain available in an isolated file copy; both `Share File` and `Share Workspace` SHALL remain available in an isolated workspace. Creating another share from that copy SHALL use its latest edits and create a new share identifier; it SHALL NOT alter the URL or payload that originally opened the copy. The recipient SHALL also be able to use supported export actions to retain changes.
 
 #### Scenario: Open a valid file share at startup
 
@@ -156,6 +161,16 @@ The system SHALL open a valid web share as an isolated editable file or workspac
 
 - **WHEN** the recipient edits a shared file or workspace
 - **THEN** the changes stay in the isolated shared copy and do not write into another workspace or update the original URL
+
+#### Scenario: Share an edited shared file again
+
+- **WHEN** the recipient edits a shared Markdown or CSV file and chooses `Share File`
+- **THEN** the new share contains the latest edits, uses a new share identifier, and leaves the original share URL and payload unchanged
+
+#### Scenario: Share an edited shared workspace again
+
+- **WHEN** the recipient edits files in a shared workspace and chooses `Share Workspace`
+- **THEN** the new share contains the latest workspace edits with relative paths, includes, and CSV formulas preserved, uses a new share identifier, and leaves the original share URL and payload unchanged
 
 #### Scenario: Resume a share after editing
 

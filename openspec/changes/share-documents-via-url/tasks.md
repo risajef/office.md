@@ -15,8 +15,8 @@
 
 ## 4. Isolated web startup and editing
 
-- [ ] 4.1 Add failing startup/browser coverage for opening file and workspace shares before the normal chooser, preserving relative paths, resuming a separate local copy across reloads, handling browser storage failure, and avoiding writes to disk-backed workspaces.
-- [ ] 4.2 Decode valid shares before normal workspace startup and persist isolated editable file/workspace copies separately from disk-backed workspaces. If browser storage fails, keep the copy available temporarily and explain the persistence failure. Show focused errors for malformed, unsupported, oversized, or undecryptable payloads without falling back to another workspace.
+- [ ] 4.1 Add failing startup/browser coverage for opening file and workspace shares before the normal chooser, preserving relative paths, resuming a separate local copy across reloads, re-sharing edited file/workspace copies into new URLs, handling browser storage failure, and avoiding writes to disk-backed workspaces.
+- [ ] 4.2 Decode valid shares before normal workspace startup and persist isolated editable file/workspace copies separately from disk-backed workspaces. Keep share actions available and create new snapshots from the latest edits with new identifiers. If browser storage fails, keep the copy available temporarily and explain the persistence failure. Show focused errors for malformed, unsupported, oversized, or undecryptable payloads without falling back to another workspace.
 
 ## 5. Electron ZIP sharing
 
@@ -24,6 +24,7 @@
 - [ ] 5.2 Add the Electron save dialog bridge for ZIP output and optional WinZip AES-256 password protection.
 - [ ] 5.3 Add `Open Share ZIP` to Electron's file selection flow, prompt for a password when needed, validate the share manifest, paths, and 50 MiB decoded-size limit, then load or resume the archive as a separate editable copy.
 - [ ] 5.4 Verify produced archives open in office.md and supported extractors, encrypted archives require the password, and extracted files/workspaces open normally.
+- [ ] 5.5 Verify editing a ZIP-backed copy and sharing again creates a new archive with the latest edits and a new manifest identifier without changing the opened archive.
 
 ## 6. Share controls and review
 

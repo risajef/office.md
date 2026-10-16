@@ -12,7 +12,7 @@ People need to pass either one document or a complete workspace to someone else.
 - Warn when a web URL is longer than 8,000 characters, for either share mode, while allowing the user to continue and copy it.
 - Limit decoded share payloads to 50 MiB to prevent excessive memory use.
 - In packaged Electron, either action creates a ZIP archive instead of a URL. The file archive contains the portable Markdown or formula-preserving CSV; the workspace archive preserves the included workspace tree. Allow optional ZIP password protection, and let office.md open its versioned share archive directly.
-- Open shares as isolated editable copies. Web recipients keep a separate local copy across reloads; changes do not write to another workspace or update the original share link.
+- Open shares as isolated editable copies. Web recipients keep a separate local copy across reloads; changes do not write to another workspace or update the original share link. Recipients can share again to create a new URL or ZIP containing their latest edits.
 
 ## Capabilities
 
