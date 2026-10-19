@@ -54,6 +54,7 @@ const startXvfb = () => new Promise<{
 
 const openTestWorkspace = async (page: Page) => {
   await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('#startup-new-empty-project')).toBeHidden()
   await expect(page.locator('#startup-open-folder')).toBeEnabled({ timeout: 30_000 })
   await page.locator('#startup-open-folder').click()
   await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 30_000 })
@@ -176,6 +177,7 @@ test('Electron opens and saves a password-protected share through its main-proce
     })
     const page = application.windows()[0] ?? await application.firstWindow()
     await expect(page.locator('#startup-open-share-zip')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#startup-open-share-zip')).toBeEnabled({ timeout: 30_000 })
     await page.locator('#startup-open-share-zip').click()
     await expect(page.locator('#share-dialog')).toContainText('Enter the password supplied by the sender')
     await page.locator('#share-password').fill('incoming passphrase')

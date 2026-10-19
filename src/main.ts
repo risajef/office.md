@@ -78,7 +78,12 @@ import { CsvContextToolbar } from './csv-context-toolbar'
 import { requestChoice } from './choice-dialog'
 import { createPortableMarkdown } from './portable-markdown'
 import { createShareArchive, openShareArchive } from './share-archive'
-import { createShareId, type SharePayload } from './share-document'
+import {
+  createShareId,
+  SHARE_FORMAT,
+  SHARE_VERSION,
+  type SharePayload,
+} from './share-document'
 import {
   collectWorkspaceSharePayload,
   createCurrentFileSharePayload,
@@ -271,6 +276,9 @@ const startupOpenFolderButton = document.querySelector<HTMLButtonElement>(
 )
 const startupOpenFileButton = document.querySelector<HTMLButtonElement>(
   '#startup-open-file',
+)
+const startupNewEmptyProjectButton = document.querySelector<HTMLButtonElement>(
+  '#startup-new-empty-project',
 )
 const startupOpenShareZipButton = document.querySelector<HTMLButtonElement>(
   '#startup-open-share-zip',
@@ -666,6 +674,7 @@ const workspaceApplication = editorRuntime.workspace
 const styleFolderApplication = editorRuntime.styleFolder
 const isElectronRuntime = editorRuntime.styleFolderPort?.host === 'electron'
 if (isElectronRuntime) {
+  if (startupNewEmptyProjectButton) startupNewEmptyProjectButton.hidden = true
   if (startupOpenShareZipButton) startupOpenShareZipButton.hidden = false
   if (openShareZipButton) openShareZipButton.hidden = false
   if (csvOpenShareZipButton) csvOpenShareZipButton.hidden = false
@@ -715,6 +724,7 @@ const runWorkspaceAction = async (action: () => Promise<unknown>) => {
     openFolderButton,
     startupOpenFolderButton,
     startupOpenFileButton,
+    startupNewEmptyProjectButton,
     startupOpenShareZipButton,
     openShareZipButton,
     csvOpenShareZipButton,
@@ -3703,6 +3713,28 @@ const openShareArchiveFromPicker = async (editor: EditorInstance) => {
   return true
 }
 
+const openEmptyBrowserWorkspace = async (editor: EditorInstance) => {
+  const id = createShareId()
+  const payload: SharePayload = {
+    format: SHARE_FORMAT,
+    version: SHARE_VERSION,
+    id,
+    kind: 'workspace',
+    createdAt: new Date().toISOString(),
+    entryFile: 'document.md',
+    workspaceName: 'Browser workspace',
+    files: [{
+      path: 'document.md',
+      mimeType: 'text/markdown',
+      encoding: 'utf8',
+      content: '',
+    }],
+  }
+  await loadSharedCopy(payload, editor)
+  setStatus('Started a new browser project', 'saved')
+  return true
+}
+
 const shareCurrentDocument = async (
   editor: EditorInstance,
   kind: 'file' | 'workspace',
@@ -4093,6 +4125,9 @@ const startEditor = async () => {
       if (startupStatus && startupChoice && !startupChoice.hidden) startupStatus.textContent = message
     }
   }
+  startupNewEmptyProjectButton?.addEventListener('click', () => {
+    void runWorkspaceAction(() => openEmptyBrowserWorkspace(editor))
+  })
   startupOpenShareZipButton?.addEventListener('click', () => {
     void runWorkspaceAction(openShareArchive)
   })
@@ -4104,6 +4139,7 @@ const startEditor = async () => {
   })
   if (startupOpenFolderButton) startupOpenFolderButton.disabled = false
   if (startupOpenFileButton) startupOpenFileButton.disabled = false
+  if (startupNewEmptyProjectButton && !isElectronRuntime) startupNewEmptyProjectButton.disabled = false
   if (startupOpenShareZipButton && isElectronRuntime) startupOpenShareZipButton.disabled = false
 
   const shareFile = () => {

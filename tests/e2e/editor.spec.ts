@@ -182,15 +182,18 @@ base('keeps startup selection controls disabled until they can handle requests',
       __startupInitialControlState?: {
         folderDisabled: boolean
         fileDisabled: boolean
+        emptyProjectDisabled: boolean
       }
     }
     const captureInitialState = () => {
       const folder = document.querySelector<HTMLButtonElement>('#startup-open-folder')
       const file = document.querySelector<HTMLButtonElement>('#startup-open-file')
-      if (!folder || !file) return
+      const emptyProject = document.querySelector<HTMLButtonElement>('#startup-new-empty-project')
+      if (!folder || !file || !emptyProject) return
       startupWindow.__startupInitialControlState = {
         folderDisabled: folder.disabled,
         fileDisabled: file.disabled,
+        emptyProjectDisabled: emptyProject.disabled,
       }
       observer.disconnect()
     }
@@ -205,12 +208,14 @@ base('keeps startup selection controls disabled until they can handle requests',
       __startupInitialControlState?: {
         folderDisabled: boolean
         fileDisabled: boolean
+        emptyProjectDisabled: boolean
       }
     }
     return startupWindow.__startupInitialControlState ?? null
-  })).toEqual({ folderDisabled: true, fileDisabled: true })
+  })).toEqual({ folderDisabled: true, fileDisabled: true, emptyProjectDisabled: true })
   await expect(page.locator('#startup-open-folder')).toBeEnabled()
   await expect(page.locator('#startup-open-file')).toBeEnabled()
+  await expect(page.locator('#startup-new-empty-project')).toBeEnabled()
 
   await page.locator('#startup-open-folder').click()
   await expect(page.locator('.folder-picker-dialog')).toBeVisible()
@@ -1596,3 +1601,59 @@ test.describe('rich document behavior', () => {
     await expect(page.locator('#rename-document')).toBeEnabled()
   })
 })
+
+base('starts an empty browser project, edits it, persists across reload, and shares it', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => window.localStorage.clear())
+  await page.reload()
+  await expect(page.locator('#startup-choice')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#startup-new-empty-project')).toBeEnabled()
+
+  await page.locator('#startup-new-empty-project').click()
+  await expect(page.locator('#startup-choice')).toBeHidden()
+  await expect(page.locator('.workspace-layout')).toBeVisible()
+  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#document-name')).toHaveText('document.md')
+  await expect(page.locator('#folder-status')).toContainText('Browser workspace')
+
+  // Edit document
+  const debugSource = page.locator('#debug-markdown-content')
+  const testContent = '# My New Online Document\n\nCreated without disk storage.\n'
+  await debugSource.fill(testContent)
+  await debugSource.press('Control+Enter')
+  await expect(debugSource).toHaveValue(testContent)
+
+  // Wait for auto-persistence
+  await expect.poll(async () => {
+    return page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = window.indexedDB.open('office-md-shared-copies', 1)
+        req.onsuccess = () => resolve(req.result)
+        req.onerror = () => reject(req.error)
+      })
+      const tx = db.transaction('copies', 'readonly')
+      const countReq = tx.objectStore('copies').count()
+      return new Promise<number>((resolve, reject) => {
+        countReq.onsuccess = () => resolve(countReq.result)
+        countReq.onerror = () => reject(countReq.error)
+      })
+    })
+  }).toBeGreaterThan(0)
+
+  // Test sharing works
+  await page.locator('#share-workspace').click()
+  await expect(page.locator('#share-dialog')).toBeVisible()
+  await expect(page.locator('.share-file-list li')).toHaveText(['document.md'])
+  await page.locator('#share-confirm').click()
+  await expect(page.locator('#share-link-value')).toBeVisible()
+  const shareUrl = await page.locator('#share-link-value').inputValue()
+  expect(shareUrl).toContain('#')
+  expect(shareUrl).toContain('share=')
+
+  // Open the shared link and verify content
+  await page.goto(shareUrl)
+  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#debug-markdown-content')).toHaveValue(testContent)
+  await expect(page.locator('#folder-status')).toContainText('Browser workspace')
+})
+
