@@ -1,3 +1,4 @@
+import { parseStyleFolderRequest } from '../node/request-validation'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -178,27 +179,13 @@ export const createElectronStyleFolderService = (): ElectronStyleFolderService =
   async function dispatch(request: { operation: 'reload'; folderId: string }): Promise<StyleFolderSnapshot>
   async function dispatch(request: { operation: 'readFile'; folderId: string; name: string }): Promise<string>
   async function dispatch(request: ElectronStyleFolderRequest): Promise<ElectronStyleFolderResponse>
-  async function dispatch(request: ElectronStyleFolderRequest): Promise<ElectronStyleFolderResponse> {
-    const operation = (request as { operation?: unknown } | undefined)?.operation
-    switch (operation) {
-      case 'open':
-        if (typeof (request as OpenStyleFolderRequest).path !== 'string') {
-          throw new Error('Enter a style folder path.')
-        }
-        return open((request as OpenStyleFolderRequest).path)
-      case 'restore':
-        return restore((request as RestoreStyleFolderRequest).path)
-      case 'reload': {
-        const value = request as StyleFolderRequestBase
-        return reload(value.folderId)
-      }
-      case 'readFile': {
-        const value = request as StyleFolderRequestBase & { name: string }
-        if (typeof value.name !== 'string') throw new Error('The style file name is invalid.')
-        return readFile(value.folderId, value.name)
-      }
-      default:
-        throw new Error('Unknown style-folder operation.')
+  async function dispatch(input: unknown): Promise<ElectronStyleFolderResponse> {
+    const request = parseStyleFolderRequest(input)
+    switch (request.operation) {
+      case 'open': return open(request.path)
+      case 'restore': return restore(request.path)
+      case 'reload': return reload(request.folderId)
+      case 'readFile': return readFile(request.folderId, request.name)
     }
   }
 

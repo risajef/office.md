@@ -21,7 +21,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | A2 Theme containment | Done | Detached css-tree policy removes network/global/overlay CSS; subtree selector and paint containment; 207 unit tests, build, theme typography/export browser tests pass. |
 | A3 Include expansion budgets | Done | Portable output stops at 32 include levels or 10 MiB; multiplying includes, depth, exact UTF-8 boundary, existing cycle/missing cases pass; 209 unit tests, build and specs pass. |
 | A4 Session disposal | Done | Replaced/closed disk and style sessions are revoked after successful selection; explicit host close and late-refresh guards; 213 unit tests, Electron build and all 12 sharing/Desktop workflows pass. |
-| A5 IPC payload validation | Pending | |
+| A5 IPC payload validation | Done | Typed parsers validate workspace/style records, picker hints and bounded ZIP metadata/bytes before effects; 225 unit tests, Electron build, all eight desktop/HTTP integration tests and specs pass. |
 
 ## Environment
 

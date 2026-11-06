@@ -19,6 +19,15 @@ afterEach(async () => {
 })
 
 describe('Electron workspace service', () => {
+  it.each([
+    null,
+    { operation: 'readFile', workspaceId: 'session', name: 12 },
+    { operation: 'writeFile', workspaceId: 'session', name: 'notes.md', markdown: false },
+    { operation: 'reload', workspaceId: 'session', refreshOnly: 'yes' },
+    { operation: 'renameFile', workspaceId: 'session', oldName: 'notes.md' },
+  ])('rejects malformed requests deliberately before filesystem access: %j', async (request) => {
+    await expect(createElectronWorkspaceService().dispatch(request as never)).rejects.toThrow('Invalid request')
+  })
   it('revokes replaced and closed sessions while preserving a session after failed selection', async () => {
     const root = await createFixture()
     const service = createElectronWorkspaceService()

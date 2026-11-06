@@ -1,3 +1,4 @@
+import { optionalRequestPath, parseShareArchiveSave } from '../node/request-validation'
 import { pathToFileURL } from 'node:url'
 import { isTrustedRenderer, externalWebUrl } from './renderer-policy'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
@@ -66,12 +67,11 @@ const recordPayload = (payload: unknown) => {
 const registerWorkspaceHandlers = () => {
   handleRendererRequest(ELECTRON_WORKSPACE_CHANNELS.open, async (_event, startLocation: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const pickerPath = optionalRequestPath(startLocation)
     const testWorkspacePath = process.env.OFFICE_MD_TEST_WORKSPACE
     let selectedPath = testWorkspacePath
     if (!selectedPath) {
-      const requestedLocation = typeof startLocation === 'string'
-        ? startLocation
-        : lastWorkspacePath
+      const requestedLocation = pickerPath ?? lastWorkspacePath
       let defaultPath = app.getPath('documents')
       if (requestedLocation) {
         try {
@@ -93,14 +93,13 @@ const registerWorkspaceHandlers = () => {
 
   handleRendererRequest(ELECTRON_WORKSPACE_CHANNELS.openFile, async (_event, startLocation: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
+    const pickerPath = optionalRequestPath(startLocation)
     const testFilePath = process.env.OFFICE_MD_TEST_FILE
     let selectedFile: string | undefined
     if (testFilePath) {
       selectedFile = testFilePath
     } else {
-      const requestedLocation = typeof startLocation === 'string'
-        ? startLocation
-        : lastWorkspacePath
+      const requestedLocation = pickerPath ?? lastWorkspacePath
       let defaultPath = app.getPath('documents')
       if (requestedLocation) {
         try {
@@ -221,15 +220,13 @@ const registerShareHandlers = () => {
       selectedPath = selection.filePaths[0]
       if (selection.canceled || !selectedPath) return undefined
     }
+    if ((await stat(selectedPath)).size > 50 * 1024 * 1024) throw new Error('The share archive exceeds the 50 MiB input limit.')
     return new Uint8Array(await readFile(selectedPath))
   })
 
   handleRendererRequest(ELECTRON_SHARE_CHANNELS.saveArchive, async (_event, input: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
-    const value = recordPayload(input)
-    if (!(value.bytes instanceof Uint8Array) || typeof value.suggestedName !== 'string') {
-      throw new Error('The share archive data is invalid.')
-    }
+    const value = parseShareArchiveSave(input)
     const testSavePath = process.env.OFFICE_MD_TEST_SHARE_SAVE_PATH
     let selectedPath = testSavePath
     if (!selectedPath) {

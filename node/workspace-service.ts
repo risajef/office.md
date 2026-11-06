@@ -1,3 +1,4 @@
+import { parseWorkspaceRequest } from './request-validation'
 import { createWorkspaceScanner } from './workspace-scanner'
 import type { WorkspaceLimits } from '../src/workspace-budget'
 import { resolveWorkspaceTarget } from './workspace-path-policy'
@@ -349,72 +350,24 @@ export const createNodeWorkspaceService = (limits?: Partial<WorkspaceLimits>): N
   async function dispatch(request: { operation: 'reload'; workspaceId: string }): Promise<WorkspaceSnapshot>
   async function dispatch(request: { operation: 'readFile'; workspaceId: string; name: string }): Promise<string>
   async function dispatch(request: NodeWorkspaceRequest): Promise<NodeWorkspaceResponse>
-  async function dispatch(request: NodeWorkspaceRequest): Promise<NodeWorkspaceResponse> {
-    const operation = (request as { operation?: unknown } | undefined)?.operation
-    switch (operation) {
-      case 'close': close((request as WorkspaceRequestBase).workspaceId); return { ok: true }
-      case 'open':
-        if (typeof (request as OpenWorkspaceRequest).path !== 'string') {
-          throw new Error('Enter a folder path.')
-        }
-        return open((request as OpenWorkspaceRequest).path)
-      case 'restore':
-        return restore((request as RestoreWorkspaceRequest).path)
-      case 'reload': {
-        const value = request as WorkspaceRequestBase & { refreshOnly?: boolean }
-        return reload(value.workspaceId, value.refreshOnly)
-      }
-      case 'readFile': {
-        const value = request as WorkspaceRequestBase & { name: string }
-        return readFile(value.workspaceId, value.name)
-      }
+  async function dispatch(input: unknown): Promise<NodeWorkspaceResponse> {
+    const request = parseWorkspaceRequest(input)
+    switch (request.operation) {
+      case 'close': close(request.workspaceId); return { ok: true }
+      case 'open': return open(request.path)
+      case 'restore': return restore(request.path)
+      case 'reload': return reload(request.workspaceId, request.refreshOnly)
+      case 'readFile': return readFile(request.workspaceId, request.name)
       case 'readAssetUrl': {
-        const value = request as WorkspaceRequestBase & { name: string }
-        const dataUrl = await readAssetUrl(value.workspaceId, value.name)
+        const dataUrl = await readAssetUrl(request.workspaceId, request.name)
         return dataUrl ? { dataUrl } : undefined
       }
-      case 'writeFile': {
-        const value = request as WorkspaceRequestBase & { name: string; markdown: string }
-        return writeFile(value.workspaceId, value.name, value.markdown)
-      }
-      case 'saveImageAsset': {
-        const value = request as WorkspaceRequestBase & {
-          directory: string
-          suggestedName: string
-          bytes: Uint8Array
-        }
-        if (typeof value.directory !== 'string' || typeof value.suggestedName !== 'string') {
-          throw new Error('The image write request is invalid.')
-        }
-        return saveImageAsset(
-          value.workspaceId,
-          value.directory,
-          value.suggestedName,
-          value.bytes,
-        )
-      }
-      case 'renameFile': {
-        const value = request as WorkspaceRequestBase & { oldName: string; newName: string }
-        await renameFile(value.workspaceId, value.oldName, value.newName)
-        return { ok: true }
-      }
-      case 'createDirectory': {
-        const value = request as WorkspaceRequestBase & { name: string }
-        await createDirectory(value.workspaceId, value.name)
-        return { ok: true }
-      }
-      case 'deleteFile': {
-        const value = request as WorkspaceRequestBase & { name: string }
-        await deleteFile(value.workspaceId, value.name)
-        return { ok: true }
-      }
-      case 'deleteDirectory': {
-        const value = request as WorkspaceRequestBase & { name: string }
-        await deleteDirectory(value.workspaceId, value.name)
-        return { ok: true }
-      }
-      default:
-        throw new Error('Unknown workspace operation.')
+      case 'writeFile': return writeFile(request.workspaceId, request.name, request.markdown)
+      case 'saveImageAsset': return saveImageAsset(request.workspaceId, request.directory, request.suggestedName, request.bytes)
+      case 'renameFile': await renameFile(request.workspaceId, request.oldName, request.newName); return { ok: true }
+      case 'createDirectory': await createDirectory(request.workspaceId, request.name); return { ok: true }
+      case 'deleteFile': await deleteFile(request.workspaceId, request.name); return { ok: true }
+      case 'deleteDirectory': await deleteDirectory(request.workspaceId, request.name); return { ok: true }
     }
   }
 
