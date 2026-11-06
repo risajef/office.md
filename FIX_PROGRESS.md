@@ -22,9 +22,21 @@ Each finding is implemented and committed separately, with regression evidence a
 | A3 Include expansion budgets | Done | Portable output stops at 32 include levels or 10 MiB; multiplying includes, depth, exact UTF-8 boundary, existing cycle/missing cases pass; 209 unit tests, build and specs pass. |
 | A4 Session disposal | Done | Replaced/closed disk and style sessions are revoked after successful selection; explicit host close and late-refresh guards; 213 unit tests, Electron build and all 12 sharing/Desktop workflows pass. |
 | A5 IPC payload validation | Done | Typed parsers validate workspace/style records, picker hints and bounded ZIP metadata/bytes before effects; 225 unit tests, Electron build, all eight desktop/HTTP integration tests and specs pass. |
-
 | F9b CSV cache invalidation on reopen | Done | Reopening the same workspace now rebuilds missing CSV evaluations; browser regression red then green; 225 unit tests, build and specs pass. |
 
 ## Environment
 
-Restored locked dependencies with `npm ci`; package manifest and lockfile unchanged. Generated build/test output remains ignored. All work starts at subrepo revision `46132f1`.
+Restored locked dependencies with `npm ci`. DOMPurify and css-tree were subsequently added as direct runtime dependencies, with css-tree TypeScript definitions as a development dependency; the lockfile records these additions. Generated build/test output remains ignored. All work starts at subrepo revision `46132f1`.
+
+## Final verification — 2026-11-06
+
+All 11 main findings, all 5 additional concerns, and the CSV cache integration follow-up are complete in 17 independent fix commits. A separate final verification commit records this handoff.
+
+- `npm test`: 225 tests pass across 49 files.
+- `npm run build` and `npm run build:electron`: pass.
+- `npm run spec:validate`: all 9 accepted specifications pass; completed changes are synced and archived.
+- Complete Playwright suite: all 56 browser, HTTP and real Electron tests pass. A temporary configuration under `/tmp` used port 43179 because port 4173 was occupied; the same test files ran with one worker and real Chromium/Electron.
+- No source or generated output remains uncommitted in this subrepository after handoff.
+- No push, release publication, workflow dispatch, parent website edit, or parent submodule-pointer staging was performed. Other existing parent-repository changes were left untouched.
+
+The new branch/PR workflow has been reviewed and its checks run locally; hosted execution awaits a future push. Workspace and portable-export limits and the supported document-theme CSS policy are intentional and documented in accepted specs and README.

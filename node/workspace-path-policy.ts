@@ -35,4 +35,3 @@ export const resolveWorkspaceTarget = async (root: string, name: string) => {
   }
   return target
 }
-
