@@ -45,6 +45,38 @@ const backend = (
 })
 
 describe('Web workspace port', () => {
+  it('preserves an external deletion until an explicit refreshed write recreates the file', async () => {
+    let contents: string | undefined = 'original'
+    const handle: LocalFileHandle = {
+      kind: 'file', name: 'notes.md',
+      getFile: async () => new File([contents ?? ''], 'notes.md'),
+      createWritable: async () => ({
+        write: async (value) => { contents = String(value) },
+        close: async () => undefined,
+      }),
+    }
+    const root: LocalDirectoryHandle = {
+      kind: 'directory', name: 'project',
+      entries: async function* () { if (contents !== undefined) yield ['notes.md', handle] },
+      getFileHandle: async () => { contents ??= ''; return handle },
+    }
+    const original = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker')
+    Object.defineProperty(window, 'showDirectoryPicker', { configurable: true, value: async () => root })
+    try {
+      const port = createWebWorkspacePort([createDefaultWebWorkspaceBackends()[1]])
+      await port.open()
+      contents = undefined
+      await expect(port.writeFile('notes.md', 'local')).rejects.toMatchObject({ diskFileExists: false })
+      expect(contents).toBeUndefined()
+      await port.refresh()
+      await port.writeFile('notes.md', 'local')
+      expect(contents).toBe('local')
+    } finally {
+      if (original) Object.defineProperty(window, 'showDirectoryPicker', original)
+      else delete (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker
+    }
+  })
+
   it('prefers the local bridge and routes workspace operations to it', async () => {
     const server = backend('server')
     const browser = backend('browser')

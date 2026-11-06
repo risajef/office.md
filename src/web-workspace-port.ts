@@ -427,12 +427,12 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
       const knownFile = currentSnapshot?.files.find((file) => file.name === name)
       let handle = await findLocalFileHandle(selected, name)
       let created = false
+      if (!handle && knownFile) {
+        throw new WorkspaceFileConflictError(name, false)
+      }
       if (!handle && selected.getFileHandle && !name.includes('/')) {
         handle = await selected.getFileHandle(name, { create: true })
         created = true
-      }
-      if (!handle && knownFile) {
-        throw new WorkspaceFileConflictError(name, false)
       }
       if (!handle) throw new Error(`Could not find ${name} in the open folder.`)
       if (!created) {
