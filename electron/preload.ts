@@ -14,6 +14,7 @@ import type {
 // Keep the sandboxed preload self-contained: it may require Electron's
 // built-in modules, but it must not load arbitrary application modules.
 const channels = {
+  close: 'workspace:close',
   open: 'workspace:open',
   openFile: 'workspace:open-file',
   restore: 'workspace:restore',
@@ -44,6 +45,7 @@ const invoke = <Result>(channel: string, payload?: unknown) =>
   ipcRenderer.invoke(channel, payload) as Promise<Result>
 
 const workspace: ElectronWorkspaceApi = {
+  close: (workspaceId) => invoke<void>(channels.close, { workspaceId }),
   open: (startingLocation) => invoke<WorkspaceSnapshot | undefined>(
     channels.open,
     startingLocation,

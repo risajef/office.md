@@ -24,6 +24,7 @@ type WorkspaceRequestBase = { workspaceId: string }
 export type NodeWorkspaceRequest =
   | OpenWorkspaceRequest
   | RestoreWorkspaceRequest
+  | (WorkspaceRequestBase & { operation: 'close' })
   | (WorkspaceRequestBase & { operation: 'reload'; refreshOnly?: boolean })
   | (WorkspaceRequestBase & { operation: 'readFile'; name: string })
   | (WorkspaceRequestBase & { operation: 'readAssetUrl'; name: string })
@@ -52,6 +53,7 @@ export type NodeWorkspaceResponse =
   | undefined
 
 export type NodeWorkspaceService = {
+  close: (workspaceId: string) => void
   open: (rootPath: string) => Promise<WorkspaceSnapshot>
   restore: (rootPath?: string) => Promise<WorkspaceSnapshot | undefined>
   reload: (workspaceId: string, refreshOnly?: boolean) => Promise<WorkspaceSnapshot>
@@ -149,9 +151,13 @@ export const createNodeWorkspaceService = (limits?: Partial<WorkspaceLimits>): N
       name: path.basename(root) || root,
     }
     const workspace = { info, root, diskContents: new Map<string, string>(), scanner: createWorkspaceScanner(root, limits) }
+    const snapshot = await createSnapshot(workspace)
+    workspaces.clear()
     workspaces.set(info.id, workspace)
-    return createSnapshot(workspace)
+    return snapshot
   }
+
+  const close = (workspaceId: string) => { workspaces.delete(workspaceId) }
 
   const restore = async (rootPath?: string) => {
     if (!rootPath) return undefined
@@ -346,6 +352,7 @@ export const createNodeWorkspaceService = (limits?: Partial<WorkspaceLimits>): N
   async function dispatch(request: NodeWorkspaceRequest): Promise<NodeWorkspaceResponse> {
     const operation = (request as { operation?: unknown } | undefined)?.operation
     switch (operation) {
+      case 'close': close((request as WorkspaceRequestBase).workspaceId); return { ok: true }
       case 'open':
         if (typeof (request as OpenWorkspaceRequest).path !== 'string') {
           throw new Error('Enter a folder path.')
@@ -412,6 +419,7 @@ export const createNodeWorkspaceService = (limits?: Partial<WorkspaceLimits>): N
   }
 
   return {
+    close,
     open,
     restore,
     reload,

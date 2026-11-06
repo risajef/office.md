@@ -16,6 +16,7 @@ export type WorkspaceApplicationState = {
 }
 
 export type WorkspaceApplication = {
+  close: () => Promise<void>
   readonly state: WorkspaceApplicationState
   open: () => Promise<WorkspaceSnapshot | undefined>
   openFile: (chooseFile: WorkspaceFileChooser) => Promise<WorkspaceFileSelection | undefined>
@@ -87,8 +88,10 @@ export const createWorkspaceApplication = (
   port: WorkspacePort,
 ): WorkspaceApplication => {
   let currentSnapshot: WorkspaceSnapshot | undefined
+  let generation = 0
 
   const setSnapshot = (snapshot: WorkspaceSnapshot) => {
+    if (currentSnapshot?.workspace.id !== snapshot.workspace.id) generation += 1
     currentSnapshot = copySnapshot(snapshot)
     return copySnapshot(currentSnapshot)
   }
@@ -112,6 +115,7 @@ export const createWorkspaceApplication = (
   const exports = createDocumentExportApplication({ files: () => currentSnapshot?.files ?? [] })
 
   return {
+    async close() { generation += 1; currentSnapshot = undefined; await port.close?.() },
     get state() {
       return copyState(currentSnapshot)
     },
@@ -132,10 +136,16 @@ export const createWorkspaceApplication = (
       return snapshot ? setSnapshot(snapshot) : undefined
     },
     async reload() {
-      return setSnapshot(await port.reload())
+      const expected = generation
+      const snapshot = await port.reload()
+      if (generation !== expected) throw new Error('The workspace changed while reloading.')
+      return setSnapshot(snapshot)
     },
     async refresh() {
-      return setSnapshot(await port.refresh())
+      const expected = generation
+      const snapshot = await port.refresh()
+      if (generation !== expected) throw new Error('The workspace changed while refreshing.')
+      return setSnapshot(snapshot)
     },
     readAssetUrl: (name) => port.readAssetUrl(name),
     file(name) {

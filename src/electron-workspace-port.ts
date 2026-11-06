@@ -112,6 +112,11 @@ export const createElectronWorkspacePort = (
 
   const port = createBackendWorkspacePort('electron', [{
     ...backend,
+    async close() {
+      const id = workspaceId
+      workspaceId = undefined
+      if (id) await api?.close?.(id)
+    },
     open: () => rememberWorkspace(() => backend.open()),
     openFile: (chooseFile) => rememberWorkspace(() => backend.openFile!(chooseFile)),
     restore: () => rememberWorkspace(() => backend.restore()),

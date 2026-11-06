@@ -6,6 +6,7 @@ import type {
 import type { StyleFolderSnapshot } from './style-folder-port'
 
 export const ELECTRON_WORKSPACE_CHANNELS = {
+  close: 'workspace:close',
   open: 'workspace:open',
   openFile: 'workspace:open-file',
   restore: 'workspace:restore',
@@ -21,6 +22,7 @@ export const ELECTRON_WORKSPACE_CHANNELS = {
 } as const
 
 export type ElectronWorkspaceApi = {
+  close?: (workspaceId: string) => Promise<void>
   open: (startingLocation?: string) => Promise<WorkspaceSnapshot | undefined>
   openFile: (startingLocation?: string) => Promise<WorkspaceFileSelection | undefined>
   restore: () => Promise<WorkspaceSnapshot | undefined>

@@ -19,6 +19,17 @@ afterEach(async () => {
 })
 
 describe('Electron workspace service', () => {
+  it('revokes replaced and closed sessions while preserving a session after failed selection', async () => {
+    const root = await createFixture()
+    const service = createElectronWorkspaceService()
+    const first = await service.open(root)
+    await expect(service.open(path.join(root, 'missing'))).rejects.toThrow()
+    expect(await service.readFile(first.workspace.id, 'notes.md')).toBe('# Notes\n')
+    const second = await service.open(root)
+    await expect(service.readFile(first.workspace.id, 'notes.md')).rejects.toThrow('session expired')
+    service.close(second.workspace.id)
+    await expect(service.readFile(second.workspace.id, 'notes.md')).rejects.toThrow('session expired')
+  })
   it('rejects reads and mutations through symlinked workspace entries', async () => {
     const root = await createFixture()
     const outside = await createFixture()

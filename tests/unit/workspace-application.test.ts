@@ -33,6 +33,26 @@ const createApplication = () => createWorkspaceApplication(
 )
 
 describe('WorkspaceApplication', () => {
+  it('releases the selected workspace and makes its snapshot unavailable on close', async () => {
+    const application = createApplication()
+    await application.open()
+    await application.close()
+    expect(application.state.workspace).toBeUndefined()
+    expect(application.state.files).toEqual([])
+  })
+  it('does not restore a closed session when an outstanding refresh completes', async () => {
+    const port = createMemoryWorkspacePort({ path: '/workspace', name: 'workspace', files: [] })
+    const application = createWorkspaceApplication(port)
+    const snapshot = (await application.open())!
+    let finish!: (value: WorkspaceSnapshot) => void
+    port.refresh = () => new Promise<WorkspaceSnapshot>((resolve) => { finish = resolve })
+    const refreshing = application.refresh()
+    const rejected = expect(refreshing).rejects.toThrow('workspace changed')
+    await application.close()
+    finish(snapshot)
+    await rejected
+    expect(application.state.workspace).toBeUndefined()
+  })
   it('does not apply an old save completion to a newly opened workspace', async () => {
     let finish!: () => void
     let sequence = 0

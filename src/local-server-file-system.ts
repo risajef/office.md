@@ -159,3 +159,5 @@ export const deleteLocalServerDirectory = (
   workspaceId: string,
   name: string,
 ) => post<{ ok: true }>('delete-directory', { workspaceId, name })
+
+export const closeLocalServerWorkspace = (workspaceId: string) => post<{ ok: true }>('close', { workspaceId })

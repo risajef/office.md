@@ -3582,6 +3582,8 @@ const loadSharedCopy = async (
 ) => {
   if (editor && activeCsvWorksheet) destroyCsvEditor()
   activeCsvFileId = undefined
+  documentSession.reset()
+  await workspaceApplication.close()
   activeShareCopyId = payload.id
   activeShareWorkspaceName = payload.workspaceName ??
     payload.entryFile?.split('/').at(-1) ?? 'Shared workspace'

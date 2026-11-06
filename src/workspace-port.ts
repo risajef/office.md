@@ -65,6 +65,7 @@ export type WorkspaceFileChooser = (
 export type WorkspacePortHost = 'web' | 'electron' | 'memory'
 
 export type WorkspaceBackend = {
+  close?: () => Promise<void>
   readonly name: string
   isAvailable: () => Promise<boolean>
   open: () => Promise<WorkspaceSnapshot | undefined>
@@ -87,6 +88,7 @@ export type WorkspaceBackend = {
 }
 
 export type WorkspacePort = {
+  close?: () => Promise<void>
   readonly host: WorkspacePortHost
   readonly workspace: WorkspaceInfo | undefined
   open: () => Promise<WorkspaceSnapshot | undefined>
@@ -131,6 +133,12 @@ export const createBackendWorkspacePort = (
 
   return {
     host,
+    async close() {
+      const backend = activeBackend
+      activeBackend = undefined
+      currentWorkspace = undefined
+      await backend?.close?.()
+    },
     get workspace() {
       return currentWorkspace ? { ...currentWorkspace } : undefined
     },

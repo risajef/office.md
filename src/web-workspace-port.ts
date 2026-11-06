@@ -30,6 +30,7 @@ import {
   type LocalWorkspaceCache,
 } from './local-file-system'
 import {
+  closeLocalServerWorkspace,
   createLocalServerDirectory,
   deleteLocalServerDirectory,
   deleteLocalServerFile,
@@ -212,6 +213,12 @@ const createLocalServerBackend = (): WorkspaceBackend => {
 
   return {
     name: 'local-server',
+    async close() {
+      const id = workspace?.id
+      workspace = undefined
+      currentSnapshot = undefined
+      if (id) await closeLocalServerWorkspace(id)
+    },
     isAvailable: async () => localServerBridgeIsAvailable() &&
       Boolean(await getLocalServerCapabilities()),
     async open() {
@@ -337,7 +344,7 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
     if (!await ensureLocalPermission(selected, 'readwrite', requestPermission)) {
       throw new Error('Read and write permission is required for this folder.')
     }
-    clearObjectUrls()
+    if (force || directory !== selected) clearObjectUrls()
     if (directory !== selected) textCache.clear()
     const next = await readLocalWorkspace(selected, '', { cache: textCache, force })
     directory = selected
@@ -352,6 +359,7 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
 
   return {
     name: 'browser-folder',
+    async close() { clearObjectUrls(); textCache.clear(); directory = undefined; currentSnapshot = undefined },
     isAvailable: async () => typeof (
       window as Window & { showDirectoryPicker?: unknown }
     ).showDirectoryPicker === 'function',

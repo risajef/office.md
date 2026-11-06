@@ -22,6 +22,15 @@ afterEach(async () => {
 })
 
 describe('Electron style-folder service', () => {
+  it('revokes a replaced style session only after successful selection', async () => {
+    const root = await createFixture()
+    const service = createElectronStyleFolderService()
+    const first = await service.open(root)
+    await expect(service.open(path.join(root, 'missing'))).rejects.toThrow()
+    expect(await service.readFile(first.folder.id, 'paper.css')).toBe('paper')
+    await service.open(root)
+    await expect(service.readFile(first.folder.id, 'paper.css')).rejects.toThrow('session expired')
+  })
   it('scans a selected folder read-only and filters unsupported or hidden content', async () => {
     const root = await createFixture()
     const service = createElectronStyleFolderService()

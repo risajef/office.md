@@ -145,6 +145,7 @@ const registerWorkspaceHandlers = () => {
   })
 
   const operations = [
+    ['close', ELECTRON_WORKSPACE_CHANNELS.close],
     ['reload', ELECTRON_WORKSPACE_CHANNELS.reload],
     ['readFile', ELECTRON_WORKSPACE_CHANNELS.readFile],
     ['readAssetUrl', ELECTRON_WORKSPACE_CHANNELS.readAssetUrl],

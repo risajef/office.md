@@ -193,6 +193,7 @@ export const installFilesystemMiddleware = (
           name: path.basename(root) || root,
         }
         const files = await readStyleFiles(root)
+        styleFolders.clear()
         styleFolders.set(folder.id, root)
         sendJson(response, 200, {
           folder,
@@ -237,7 +238,7 @@ export const installFilesystemMiddleware = (
       }
 
       const operations: Record<string, NodeWorkspaceRequest['operation']> = {
-        reload: 'reload', write: 'writeFile', rename: 'renameFile', mkdir: 'createDirectory',
+        close: 'close', reload: 'reload', write: 'writeFile', rename: 'renameFile', mkdir: 'createDirectory',
         'delete-file': 'deleteFile', 'delete-directory': 'deleteDirectory',
       }
       const operation = operations[url.pathname.slice(API_ROOT.length + 1)]

@@ -145,6 +145,7 @@ export const createElectronStyleFolderService = (): ElectronStyleFolderService =
     // A successful scan is part of selection: an unreadable folder is never
     // retained as the current or remembered style source.
     const snapshot = await createSnapshot(folder)
+    folders.clear()
     folders.set(info.id, folder)
     return snapshot
   }
