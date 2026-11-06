@@ -11,7 +11,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F3 Filesystem confinement | Done | Shared path policy rejects symlink reads and mutation endpoints; 187 unit tests, Electron build, three HTTP integration tests and specs pass. |
 | F4 Save revision tracking | Done | Captured revisions and serialized saves; delayed typing, queued workspace switch and late completion regressions; 190 unit tests, build, two browser conflict/refresh tests and specs pass. |
 | F5 Deleted browser files | Done | Missing known files now conflict before handle creation; explicit refreshed recreation remains supported; 191 unit tests, build and specs pass. |
-| F6 Cache failures block saves | Pending | |
+| F6 Cache failures block saves | Done | Nonthrowing storage boundary; full-cache autosave regression red then green and blocked-storage startup test; 192 unit tests, build, both browser cases and specs pass. |
 | F7 Unsafe mutation retries | Pending | |
 | F8 Application/state boundaries | Pending | |
 | F9 Workspace refresh/cache cost | Pending | |

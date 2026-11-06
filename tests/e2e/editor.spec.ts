@@ -644,6 +644,23 @@ base.describe('local filesystem bridge', () => {
 })
 
 test.describe('disk-backed editor workflows', () => {
+  test('starts with workspace actions when browser storage access is blocked', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Blocked', 'SecurityError') } })
+    })
+    await page.reload()
+    await expect(page.locator('#startup-choice').getByRole('button', { name: 'Open folder' })).toBeEnabled()
+  })
+
+  test('autosaves to disk when browser cache writes fail', async ({ page, workspace }) => {
+    await page.evaluate(() => {
+      Storage.prototype.setItem = () => { throw new DOMException('Full', 'QuotaExceededError') }
+    })
+    await editMarkdownSource(page, '# Saved despite a full browser cache')
+    await expect.poll(() => readFile(workspace.file('document.md'), 'utf8'), { timeout: 5_000 })
+      .toContain('Saved despite a full browser cache')
+  })
+
   test('shows files created outside office.md without a manual reload', async ({
     page,
     workspace,
@@ -1656,4 +1673,3 @@ base('starts an empty browser project, edits it, persists across reload, and sha
   await expect(page.locator('#debug-markdown-content')).toHaveValue(testContent)
   await expect(page.locator('#folder-status')).toContainText('Browser workspace')
 })
-

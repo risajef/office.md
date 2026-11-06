@@ -1,3 +1,4 @@
+import { optionalStorage } from './optional-storage'
 import {
   defaultValueCtx,
   Editor,
@@ -130,15 +131,6 @@ const PAGE_SETTINGS_KEY = 'milkdown-editor-page-settings-v2'
 const WORKSPACE_LAYOUT_KEY = 'milkdown-editor-workspace-layout-v1'
 const IMAGE_DRAG_MIME = 'application/x-office-md-image'
 
-const isStorageQuotaError = (error: unknown) => {
-  if (!error || typeof error !== 'object') return false
-  const candidate = error as { code?: unknown; name?: unknown }
-  return candidate.name === 'QuotaExceededError' ||
-    candidate.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
-    candidate.code === 22 ||
-    candidate.code === 1014
-}
-
 type PagePreset = 'a4-portrait' | 'a4-landscape' | 'slide-16-9' | 'custom'
 
 type PageFormatSettings = {
@@ -171,7 +163,7 @@ const defaultPageSettings = (): StoredPageSettings => ({
 })
 
 const readPageSettings = () => {
-  const stored = window.localStorage.getItem(PAGE_SETTINGS_KEY)
+  const stored = optionalStorage.getItem(PAGE_SETTINGS_KEY)
   if (!stored) return {} as Record<string, StoredPageSettings>
   try {
     const parsed = JSON.parse(stored) as unknown
@@ -374,7 +366,7 @@ const workspaceWidth = (
   : fallback
 
 const readWorkspaceLayout = (): WorkspaceLayoutState => {
-  const stored = window.localStorage.getItem(WORKSPACE_LAYOUT_KEY)
+  const stored = optionalStorage.getItem(WORKSPACE_LAYOUT_KEY)
   if (!stored) return { ...defaultWorkspaceLayout }
   try {
     const parsed = JSON.parse(stored) as Partial<WorkspaceLayoutState>
@@ -392,7 +384,7 @@ const readWorkspaceLayout = (): WorkspaceLayoutState => {
 const workspaceLayoutState = readWorkspaceLayout()
 
 const persistWorkspaceLayout = () => {
-  window.localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(workspaceLayoutState))
+  optionalStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(workspaceLayoutState))
 }
 
 const updateWorkspacePanelControl = (
@@ -590,7 +582,7 @@ const exampleFiles = [...exampleMarkdownFiles, ...exampleCsvFiles]
     return left.name.localeCompare(right.name)
   })
 
-const storedMarkdown = window.localStorage.getItem(STORAGE_KEY)
+const storedMarkdown = optionalStorage.getItem(STORAGE_KEY)
 const initialMarkdown =
   exampleMarkdownFiles.find((file) => file.name === 'feature-tour.md')?.markdown ??
   exampleMarkdownFiles[0]?.markdown ??
@@ -614,7 +606,7 @@ const fallbackFiles: WorkspaceFile[] = exampleFiles.length
     ]
 
 const readWorkspaceFiles = (): WorkspaceFile[] => {
-  const stored = window.localStorage.getItem(FILES_STORAGE_KEY)
+  const stored = optionalStorage.getItem(FILES_STORAGE_KEY)
   if (!stored) return fallbackFiles
 
   try {
@@ -708,7 +700,7 @@ const clearImageObjectUrls = () => {
 }
 
 let activeFileId =
-  window.localStorage.getItem(ACTIVE_FILE_KEY) ?? workspaceFiles[0]?.id ?? ''
+  optionalStorage.getItem(ACTIVE_FILE_KEY) ?? workspaceFiles[0]?.id ?? ''
 if (!workspaceFiles.some((file) => file.id === activeFileId)) {
   activeFileId = workspaceFiles[0]?.id ?? ''
 }
@@ -963,28 +955,13 @@ const persistWorkspace = () => {
     return
   }
   if (!workspaceCacheUnavailable) {
-    const persistedFiles = workspaceFiles.map((file) => ({ ...file }))
-    const serializedFiles = JSON.stringify(persistedFiles)
-    try {
-      window.localStorage.setItem(FILES_STORAGE_KEY, serializedFiles)
-    } catch (error) {
-      if (!isStorageQuotaError(error)) throw error
-      window.localStorage.removeItem(FILES_STORAGE_KEY)
-      try {
-        window.localStorage.setItem(FILES_STORAGE_KEY, serializedFiles)
-      } catch (retryError) {
-        if (!isStorageQuotaError(retryError)) throw retryError
-        workspaceCacheUnavailable = true
-        console.warn('Could not cache the workspace in browser storage; continuing without a workspace cache.')
-      }
+    const serializedFiles = JSON.stringify(workspaceFiles.map((file) => ({ ...file })))
+    if (!optionalStorage.setItem(FILES_STORAGE_KEY, serializedFiles)) {
+      workspaceCacheUnavailable = true
+      console.warn('Browser cache unavailable; disk editing remains available.')
     }
   }
-
-  try {
-    window.localStorage.setItem(ACTIVE_FILE_KEY, activeFileId)
-  } catch (error) {
-    if (!isStorageQuotaError(error)) throw error
-  }
+  optionalStorage.setItem(ACTIVE_FILE_KEY, activeFileId)
 }
 
 const activeFile = () => workspaceFiles.find((file) => file.id === activeFileId)
@@ -1857,7 +1834,7 @@ const pageSettingsFor = (fileId: string) => {
 }
 
 const persistPageSettings = () => {
-  window.localStorage.setItem(PAGE_SETTINGS_KEY, JSON.stringify(pageSettingsByFile))
+  optionalStorage.setItem(PAGE_SETTINGS_KEY, JSON.stringify(pageSettingsByFile))
 }
 
 const activePageSettings = () => {
@@ -2170,7 +2147,7 @@ const storeActiveFile = async () => {
 
   if (file.kind === 'markdown' && workspaceEditor) {
     file.markdown = getMarkdown(workspaceEditor)
-    window.localStorage.setItem(STORAGE_KEY, file.markdown)
+    optionalStorage.setItem(STORAGE_KEY, file.markdown)
   }
   persistWorkspace()
 
@@ -2183,6 +2160,11 @@ const storeActiveFile = async () => {
     return success
   }
 
+  if (workspaceCacheUnavailable) {
+    setStatus('Browser cache unavailable · export to retain edits', 'ready')
+    setCsvStatus('Browser cache unavailable · export to retain edits', 'ready')
+    return false
+  }
   setStatus(`Stored ${file.name} in browser storage`, 'saved')
   setCsvStatus(`Stored ${file.name} in browser storage`, 'saved')
   return true
@@ -2439,8 +2421,8 @@ const scheduleCsvAutoSave = (file: WorkspaceFile) => {
           setStatus('Stored on disk', 'saved')
         }
       } else {
-        setCsvStatus(activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage', 'saved')
-        setStatus(activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage', 'saved')
+        setCsvStatus(activeShareCopyId ? 'Saved in isolated shared copy' : workspaceCacheUnavailable ? 'Browser cache unavailable · export to retain edits' : 'Saved in browser storage', 'saved')
+        setStatus(activeShareCopyId ? 'Saved in isolated shared copy' : workspaceCacheUnavailable ? 'Browser cache unavailable · export to retain edits' : 'Saved in browser storage', 'saved')
       }
     })()
     csvSaveOperation = operation
@@ -2728,7 +2710,7 @@ const openFile = (editor: EditorInstance, fileId: string) => {
   if (current && current.id !== fileId) {
     if (current.kind === 'markdown' && workspaceEditor) {
       current.markdown = getMarkdown(workspaceEditor)
-      window.localStorage.setItem(STORAGE_KEY, current.markdown)
+      optionalStorage.setItem(STORAGE_KEY, current.markdown)
     }
     persistActiveCsv()
     persistWorkspace()
@@ -3932,6 +3914,7 @@ const startEditor = async () => {
             'saving',
           )
         },
+        onCacheUnavailable: () => { workspaceCacheUnavailable = true },
         onSaved: async () => {
           if (isLoadingMarkdown) return
           const file = activeFile()
@@ -3944,7 +3927,7 @@ const startEditor = async () => {
             }
           } else {
             setStatus(
-              activeShareCopyId ? 'Saved in isolated shared copy' : 'Saved in browser storage',
+              activeShareCopyId ? 'Saved in isolated shared copy' : workspaceCacheUnavailable ? 'Browser cache unavailable · export to retain edits' : 'Saved in browser storage',
               'saved',
             )
           }

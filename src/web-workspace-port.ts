@@ -1,3 +1,4 @@
+import { optionalStorage } from './optional-storage'
 import {
   createBackendWorkspacePort,
   type WorkspaceFileChooser,
@@ -50,7 +51,7 @@ type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 const browserStorage = (): StorageLike | undefined => {
   try {
-    return window.localStorage
+    return optionalStorage
   } catch {
     return undefined
   }

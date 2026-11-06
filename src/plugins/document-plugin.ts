@@ -1,5 +1,6 @@
 import { listenerCtx } from '@milkdown/kit/plugin/listener'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import { optionalStorage } from '../optional-storage'
 
 export type DocumentStats = {
   words: number
@@ -12,6 +13,7 @@ type DocumentPluginOptions = {
   onMarkdownChange?: (markdown: string) => void
   onSaved: () => void | Promise<void>
   onSaving: () => void
+  onCacheUnavailable?: () => void
 }
 
 const getStats = (markdown: string): DocumentStats => ({
@@ -38,7 +40,7 @@ export const documentPlugin = (
 
       if (saveTimer !== undefined) window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
-        window.localStorage.setItem(options.storageKey, markdown)
+        if (!optionalStorage.setItem(options.storageKey, markdown)) options.onCacheUnavailable?.()
         void options.onSaved()
       }, 450)
     })
