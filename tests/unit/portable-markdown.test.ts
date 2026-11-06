@@ -11,6 +11,20 @@ const create = (
 })
 
 describe('portable Markdown', () => {
+  it('rejects multiplying include output before exceeding the byte budget', () => {
+    expect(() => createPortableMarkdown('![[branch]]', {
+      resolveInclude: (name) => name === 'branch' ? '![[leaf]]\n![[leaf]]' : 'ééé',
+      resolveCsv: () => undefined,
+    }, { maxBytes: 10 })).toThrow('output limit')
+  })
+  it('limits include depth and counts UTF-8 bytes at the exact boundary', () => {
+    expect(() => createPortableMarkdown('![[1]]', {
+      resolveInclude: (name) => `![[${Number(name) + 1}]]`, resolveCsv: () => undefined,
+    }, { maxDepth: 3 })).toThrow('depth limit')
+    const resolvers = { resolveInclude: () => undefined, resolveCsv: () => undefined }
+    expect(createPortableMarkdown('é\né', resolvers, { maxBytes: 5 })).toBe('é\né')
+    expect(() => createPortableMarkdown('é\né', resolvers, { maxBytes: 4 })).toThrow('output limit')
+  })
   it('recursively materializes Markdown includes', () => {
     const result = create(
       '# Main\n\n![[section.md]]',

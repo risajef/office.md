@@ -8,48 +8,42 @@ type PortableMarkdownResolvers = {
 const fenceStartPattern = /^\s{0,3}(`{3,}|~{3,})(.*)$/
 const includePattern = /^\s*!\[\[([^\]\n]+)\]\]\s*$/
 
+type PortableMarkdownLimits = { maxBytes?: number; maxDepth?: number }
+const utf8 = new TextEncoder()
 const expandIncludes = (
   markdown: string,
   resolveInclude: PortableMarkdownResolvers['resolveInclude'],
-  ancestors: ReadonlySet<string> = new Set(),
+  options: PortableMarkdownLimits,
 ): string => {
-  const lines = markdown.split(/\r?\n/)
+  const maxBytes = options.maxBytes ?? 10 * 1024 * 1024
+  const maxDepth = options.maxDepth ?? 32
   const output: string[] = []
-  let fence: { marker: string; size: number } | undefined
-
-  for (const line of lines) {
-    const fenceMatch = line.match(fenceStartPattern)
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0]
-      if (!fence) {
-        fence = { marker, size: fenceMatch[1].length }
-      } else if (
-        marker === fence.marker &&
-        fenceMatch[1].length >= fence.size &&
-        !fenceMatch[2].trim()
-      ) {
-        fence = undefined
-      }
-      output.push(line)
-      continue
-    }
-
-    const include = !fence ? line.match(includePattern)?.[1]?.trim() : undefined
-    if (!include || ancestors.has(include)) {
-      output.push(line)
-      continue
-    }
-
-    const included = resolveInclude(include)
-    if (included === undefined) {
-      output.push(line)
-      continue
-    }
-    const nextAncestors = new Set(ancestors)
-    nextAncestors.add(include)
-    output.push(expandIncludes(included, resolveInclude, nextAncestors))
+  let total = 0
+  const append = (line: string) => {
+    total += utf8.encode(line).byteLength + (output.length ? 1 : 0)
+    if (total > maxBytes) throw new Error(`Portable Markdown exceeds the ${maxBytes} byte output limit.`)
+    output.push(line)
   }
-
+  const visit = (source: string, ancestors: ReadonlySet<string>, depth: number): void => {
+    let fence: { marker: string; size: number } | undefined
+    for (const line of source.split(/\r?\n/)) {
+      const fenceMatch = line.match(fenceStartPattern)
+      if (fenceMatch) {
+        const marker = fenceMatch[1][0]
+        if (!fence) fence = { marker, size: fenceMatch[1].length }
+        else if (marker === fence.marker && fenceMatch[1].length >= fence.size && !fenceMatch[2].trim()) fence = undefined
+        append(line)
+        continue
+      }
+      const include = !fence ? line.match(includePattern)?.[1]?.trim() : undefined
+      if (!include || ancestors.has(include)) { append(line); continue }
+      const included = resolveInclude(include)
+      if (included === undefined) { append(line); continue }
+      if (depth >= maxDepth) throw new Error(`Portable Markdown exceeds the ${maxDepth} include depth limit.`)
+      visit(included, new Set([...ancestors, include]), depth + 1)
+    }
+  }
+  visit(markdown, new Set(), 0)
   return output.join('\n')
 }
 
@@ -110,7 +104,10 @@ const materializeCsvMermaid = (
 export const createPortableMarkdown = (
   markdown: string,
   resolvers: PortableMarkdownResolvers,
-) => materializeCsvMermaid(
-  expandIncludes(markdown, resolvers.resolveInclude),
-  resolvers.resolveCsv,
-)
+  limits: PortableMarkdownLimits = {},
+) => {
+  const result = materializeCsvMermaid(expandIncludes(markdown, resolvers.resolveInclude, limits), resolvers.resolveCsv)
+  const maxBytes = limits.maxBytes ?? 10 * 1024 * 1024
+  if (utf8.encode(result).byteLength > maxBytes) throw new Error(`Portable Markdown exceeds the ${maxBytes} byte output limit.`)
+  return result
+}

@@ -19,7 +19,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F11 Branch/PR validation | Done | Read-only push/PR validation workflow runs unit, web/Electron build, specs and browser/Electron checks; YAML triggers/permissions verified; 203 local unit tests and specs pass. Hosted execution awaits a future push. |
 | A1 Electron sender/navigation policy | Done | Main-frame and trusted-URL IPC authorization; blocked navigation/popups with HTTP(S)-only external opening; 205 unit tests, Electron build and all five desktop workflows pass. |
 | A2 Theme containment | Done | Detached css-tree policy removes network/global/overlay CSS; subtree selector and paint containment; 207 unit tests, build, theme typography/export browser tests pass. |
-| A3 Include expansion budgets | Pending | |
+| A3 Include expansion budgets | Done | Portable output stops at 32 include levels or 10 MiB; multiplying includes, depth, exact UTF-8 boundary, existing cycle/missing cases pass; 209 unit tests, build and specs pass. |
 | A4 Session disposal | Pending | |
 | A5 IPC payload validation | Pending | |
 
