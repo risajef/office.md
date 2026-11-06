@@ -189,14 +189,9 @@ const createLocalServerBackend = (): WorkspaceBackend => {
     let current = workspace
     if (!current) current = (await reconnect())?.workspace
     if (!current) throw new Error('Open the local folder again before changing it.')
-    try {
-      return await operation(current.id)
-    } catch (firstError) {
-      if (firstError instanceof WorkspaceFileConflictError) throw firstError
-      const reconnected = await reconnect().catch(() => undefined)
-      if (!reconnected) throw firstError
-      return operation(reconnected.workspace.id)
-    }
+    // A lost response may follow a successful mutation. Reopening also resets
+    // the conflict baseline, so only explicit refresh may restore a session.
+    return operation(current.id)
   }
 
   const refreshWorkspace = async () => {

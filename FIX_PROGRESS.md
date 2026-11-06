@@ -12,7 +12,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F4 Save revision tracking | Done | Captured revisions and serialized saves; delayed typing, queued workspace switch and late completion regressions; 190 unit tests, build, two browser conflict/refresh tests and specs pass. |
 | F5 Deleted browser files | Done | Missing known files now conflict before handle creation; explicit refreshed recreation remains supported; 191 unit tests, build and specs pass. |
 | F6 Cache failures block saves | Done | Nonthrowing storage boundary; full-cache autosave regression red then green and blocked-storage startup test; 192 unit tests, build, both browser cases and specs pass. |
-| F7 Unsafe mutation retries | Pending | |
+| F7 Unsafe mutation retries | Done | Removed automatic mutation reconnect/retry; lost document and image response tests pass; complete unit suite, build and specs pass. |
 | F8 Application/state boundaries | Pending | |
 | F9 Workspace refresh/cache cost | Pending | |
 | F10 Standalone image export | Pending | |

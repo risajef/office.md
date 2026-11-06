@@ -45,6 +45,36 @@ const backend = (
 })
 
 describe('Web workspace port', () => {
+  it.each(['document', 'image'])('does not reopen and retry a %s mutation after its response is lost', async (kind) => {
+    const requests: string[] = []
+    let writes = 0
+    const storageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: { getItem: () => '/project', setItem: () => undefined, removeItem: () => undefined } })
+    vi.stubGlobal('fetch', async (url: string) => {
+      requests.push(url)
+      if (url.includes('/write')) {
+        if (++writes === 1) throw new TypeError('Connection lost after write')
+        return new Response(JSON.stringify({ status: 'saved' }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      const body = url.endsWith('/capabilities') ? { available: true, defaultPath: '/project' } : snapshot('project')
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } })
+    })
+    try {
+      const port = createWebWorkspacePort([createDefaultWebWorkspaceBackends()[0]])
+      await port.restore()
+      requests.splice(0)
+      await expect(kind === 'document'
+        ? port.writeFile('notes.md', 'local')
+        : port.saveImageAsset('', 'capture.png', new Uint8Array([1])))
+        .rejects.toThrow('Connection lost')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]).toContain(kind === 'document' ? '/__office_md_fs/write' : '/__office_md_fs/write-image?')
+    } finally {
+      vi.unstubAllGlobals()
+      if (storageDescriptor) Object.defineProperty(window, 'localStorage', storageDescriptor)
+    }
+  })
+
   it('preserves an external deletion until an explicit refreshed write recreates the file', async () => {
     let contents: string | undefined = 'original'
     const handle: LocalFileHandle = {
