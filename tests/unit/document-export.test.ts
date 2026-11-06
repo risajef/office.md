@@ -74,6 +74,21 @@ describe('HTML document export', () => {
     expect(html).toContain('aria-label="Styled export"')
   })
 
+  it('keeps theme strings from introducing HTML elements into exports', () => {
+    const style = document.createElement('style')
+    style.textContent = '.probe { --text: "</StYlE><script>window.probe=1</script><style>"; }'
+    document.head.append(style)
+    const html = createDocumentExportHtml({
+      editorRoot: exportRoot(), title: 'Untrusted theme',
+      layout: { width: 794, height: 1123, margin: 56, gap: 28, pageCount: 1 },
+    })
+    const parsed = new DOMParser().parseFromString(html, 'text/html')
+    expect(parsed.querySelector('script')).toBeNull()
+    expect(parsed.querySelectorAll('style')).toHaveLength(1)
+    expect(parsed.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content'))
+      .toContain("script-src 'none'")
+  })
+
   it('inlines an active external theme without a style-folder path dependency', () => {
     const external = document.createElement('style')
     external.dataset.documentTheme = 'style-folder:library/theme.css'
@@ -96,6 +111,7 @@ describe('HTML document export', () => {
     const frame = document.querySelector<HTMLIFrameElement>('iframe[title="Print preview"]')
     expect(frame).not.toBeNull()
     expect(frame?.srcdoc).toContain('Printable')
+    expect(frame?.getAttribute('sandbox')).toBe('allow-same-origin allow-modals')
 
     const printWindow = frame?.contentWindow
     expect(printWindow).not.toBeNull()

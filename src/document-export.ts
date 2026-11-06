@@ -29,6 +29,9 @@ const serializedDocumentStyles = () => Array.from(document.styleSheets)
     }
   })
   .join('\n')
+  // HTML raw-text parsing ignores CSS quotes. Escape '<' in the CSS context
+  // so theme strings cannot terminate the enclosing style element.
+  .replace(/<(?=\/style)/gi, '\\3c ')
 
 const cleanClone = (root: HTMLElement) => {
   root.querySelectorAll<HTMLElement>('[contenteditable]').forEach((element) => {
@@ -226,6 +229,7 @@ export const createDocumentExportHtml = ({
 <html lang="en">
   <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${escapeHtml(title)}</title>
     <style>${serializedDocumentStyles()}\n${exportOverrides(layout)}</style>
@@ -239,6 +243,8 @@ export const createDocumentExportHtml = ({
 /** Open the browser print dialog; selecting “Save as PDF” produces the PDF. */
 export const printDocumentHtml = (html: string) => new Promise<void>((resolve) => {
   const frame = document.createElement('iframe')
+  // The parent controls printing; document content never needs script access.
+  frame.setAttribute('sandbox', 'allow-same-origin allow-modals')
   frame.title = 'Print preview'
   frame.style.position = 'fixed'
   frame.style.right = '0'
