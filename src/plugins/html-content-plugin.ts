@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { NodeViewConstructor } from '@milkdown/kit/prose/view'
 import { htmlSchema } from '@milkdown/kit/preset/commonmark'
@@ -13,16 +14,6 @@ const blockedTags = new Set([
   'portal',
   'script',
   'style',
-])
-
-const urlAttributes = new Set([
-  'action',
-  'cite',
-  'formaction',
-  'href',
-  'poster',
-  'src',
-  'xlink:href',
 ])
 
 const blockTags = new Set([
@@ -56,49 +47,14 @@ const blockTags = new Set([
   'ul',
 ])
 
-const isUnsafeUrl = (value: string) => {
-  const normalized = value.trim().replace(/\s+/g, '')
-  return /^(?:javascript|vbscript):/i.test(normalized) ||
-    /^data:text\/html/i.test(normalized)
-}
-
-/** Parse raw HTML without allowing scripts, event handlers, or HTML comments. */
-export const createHtmlPreviewFragment = (source: string) => {
-  const template = document.createElement('template')
-  template.innerHTML = source
-
-  template.content.querySelectorAll('*').forEach((element) => {
-    if (blockedTags.has(element.tagName.toLowerCase())) {
-      element.remove()
-      return
-    }
-
-    Array.from(element.attributes).forEach((attribute) => {
-      const name = attribute.name.toLowerCase()
-      if (
-        name.startsWith('on') ||
-        name === 'srcdoc' ||
-        (urlAttributes.has(name) && isUnsafeUrl(attribute.value))
-      ) {
-        element.removeAttribute(attribute.name)
-      }
-    })
+/** Sanitize raw and included HTML through the same maintained parser policy. */
+export const createHtmlPreviewFragment = (source: string): DocumentFragment =>
+  DOMPurify.sanitize(source, {
+    RETURN_DOM_FRAGMENT: true,
+    USE_PROFILES: { html: true, svg: true, svgFilters: true },
+    FORBID_TAGS: [...blockedTags],
+    FORBID_ATTR: ['srcdoc'],
   })
-
-  const comments: Comment[] = []
-  const walker = document.createTreeWalker(
-    template.content,
-    NodeFilter.SHOW_COMMENT,
-  )
-  let current = walker.nextNode()
-  while (current) {
-    comments.push(current as Comment)
-    current = walker.nextNode()
-  }
-  comments.forEach((comment) => comment.remove())
-
-  return template.content
-}
 
 const fragmentHasVisibleContent = (fragment: DocumentFragment) =>
   Array.from(fragment.childNodes).some((node) =>
