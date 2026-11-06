@@ -1,3 +1,4 @@
+import { createWorkspaceBudget, type WorkspaceLimits } from './workspace-budget'
 import {
   isEditableTextFile,
   isImageFile,
@@ -227,34 +228,42 @@ export const restoreLocalDirectory = async () => {
 
 void restoreLocalDirectory().catch(() => undefined)
 
+type CachedLocalText = { stamp: string; markdown: string; handle: LocalFileHandle }
+export type LocalWorkspaceCache = Map<string, CachedLocalText>
+
 export const readLocalWorkspace = async (
   directory: LocalDirectoryHandle,
   prefix = '',
+  options: { cache?: LocalWorkspaceCache; force?: boolean; limits?: Partial<WorkspaceLimits> } = {},
 ): Promise<LocalWorkspace> => {
   const files: LocalTextFile[] = []
   const directories: string[] = []
-
-  for await (const [name, entry] of directory.entries()) {
-    if (entry.kind === 'directory') {
-      if (shouldSkipDirectory(name)) continue
-      const childPrefix = `${prefix}${name}/`
-      directories.push(`${prefix}${name}`)
-      const child = await readLocalWorkspace(entry, childPrefix)
-      files.push(...child.files)
-      directories.push(...child.directories)
-      continue
+  const budget = createWorkspaceBudget(options.limits)
+  const next: LocalWorkspaceCache = new Map()
+  const visit = async (current: LocalDirectoryHandle, currentPrefix: string, depth: number): Promise<void> => {
+    for await (const [name, entry] of current.entries()) {
+      if (entry.kind === 'directory') {
+        if (shouldSkipDirectory(name)) continue
+        budget.entry(depth + 1)
+        directories.push(`${currentPrefix}${name}`)
+        await visit(entry, `${currentPrefix}${name}/`, depth + 1)
+        continue
+      }
+      const image = isImageFile(name)
+      if (!isEditableTextFile(name) && !image) continue
+      const file = await entry.getFile()
+      budget.entry(depth, file.size, !image)
+      const fullName = `${currentPrefix}${name}`
+      const stamp = `${file.lastModified}:${file.size}`
+      const previous = options.cache?.get(fullName)
+      const markdown = image ? '' : !options.force && previous?.stamp === stamp
+        ? previous.markdown : await file.text()
+      next.set(fullName, { stamp, markdown, handle: entry })
+      files.push({ name: fullName, markdown, handle: entry })
     }
-
-    const image = isImageFile(name)
-    if (!isEditableTextFile(name) && !image) continue
-    const file = await entry.getFile()
-    files.push({
-      name: `${prefix}${name}`,
-      markdown: image ? '' : await file.text(),
-      handle: entry,
-    })
   }
-
+  await visit(directory, prefix, 0)
+  if (options.cache) { options.cache.clear(); for (const [name, value] of next) options.cache.set(name, value) }
   return {
     files: files.sort((left, right) => left.name.localeCompare(right.name)),
     directories: directories.sort((left, right) => left.localeCompare(right)),

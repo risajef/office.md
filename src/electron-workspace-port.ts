@@ -118,7 +118,7 @@ export const createElectronWorkspacePort = (
     reload: () => withWorkspace((id) => api?.reload(id) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
-    refresh: () => withWorkspace((id) => api?.reload(id) ?? Promise.reject(
+    refresh: () => withWorkspace((id) => api?.reload(id, true) ?? Promise.reject(
       new Error('The Electron workspace bridge is unavailable.'),
     )),
     readFile: (name) => withWorkspace((id) => api?.readFile(id, name) ?? Promise.reject(

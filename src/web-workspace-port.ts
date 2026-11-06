@@ -27,6 +27,7 @@ import {
   type LocalDirectoryHandle,
   type LocalEntryHandle,
   type LocalFileHandle,
+  type LocalWorkspaceCache,
 } from './local-file-system'
 import {
   createLocalServerDirectory,
@@ -194,9 +195,9 @@ const createLocalServerBackend = (): WorkspaceBackend => {
     return operation(current.id)
   }
 
-  const refreshWorkspace = async () => {
+  const refreshWorkspace = async (refreshOnly = false) => {
     const snapshot = workspace
-      ? await reloadLocalServerWorkspace(workspace.id).catch(async (firstError) => {
+      ? await reloadLocalServerWorkspace(workspace.id, refreshOnly).catch(async (firstError) => {
         const reconnected = await reconnect().catch(() => undefined)
         if (!reconnected) throw firstError
         return reconnected
@@ -266,7 +267,7 @@ const createLocalServerBackend = (): WorkspaceBackend => {
       const snapshot = await reconnect()
       return snapshot ? currentSnapshot : undefined
     },
-    refresh: refreshWorkspace,
+    refresh: () => refreshWorkspace(true),
     reload: refreshWorkspace,
     async readFile(name) {
       const file = currentSnapshot?.files.find((candidate) => candidate.name === name)
@@ -321,6 +322,7 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
   let directory: LocalDirectoryHandle | undefined
   let currentSnapshot: WorkspaceSnapshot | undefined
   const objectUrls = new Set<string>()
+  const textCache: LocalWorkspaceCache = new Map()
 
   const clearObjectUrls = () => {
     for (const url of objectUrls) URL.revokeObjectURL(url)
@@ -330,13 +332,16 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
   const refresh = async (
     selected: LocalDirectoryHandle,
     requestPermission: boolean,
+    force = true,
   ) => {
     if (!await ensureLocalPermission(selected, 'readwrite', requestPermission)) {
       throw new Error('Read and write permission is required for this folder.')
     }
     clearObjectUrls()
+    if (directory !== selected) textCache.clear()
+    const next = await readLocalWorkspace(selected, '', { cache: textCache, force })
     directory = selected
-    currentSnapshot = folderSnapshot(selected, await readLocalWorkspace(selected))
+    currentSnapshot = folderSnapshot(selected, next)
     return currentSnapshot
   }
 
@@ -399,7 +404,7 @@ const createBrowserFolderBackend = (): WorkspaceBackend => {
     async refresh() {
       const selected = directory ?? await restoreLocalDirectory()
       if (!selected) throw new Error('Open a folder before refreshing from disk.')
-      return refresh(selected, false)
+      return refresh(selected, false, false)
     },
     async readFile(name) {
       const file = currentSnapshot?.files.find((candidate) => candidate.name === name)

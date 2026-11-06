@@ -38,6 +38,8 @@ The bridge reads and writes `.md`, `.markdown`, `.css`, and `.csv` files below t
 
 In a disk-backed project, edits are autosaved while you work; **Store** forces an immediate write. **Reload** discards cached project data and reads the folder again from disk.
 
+Background refresh reuses unchanged text based on file metadata; **Reload** forces fresh content reads. Workspaces support up to 5,000 visible entries, 32 nested directories, 10 MiB per text file, and 50 MiB of text in total. Larger folders are rejected with an explanatory message; choose a smaller project folder.
+
 Use **New Folder** to create a visible folder inside the open workspace. The trash actions in the Files panel delete supported files and empty folders; folders containing files must be emptied first.
 
 ### Run the desktop target

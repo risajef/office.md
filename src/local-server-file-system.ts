@@ -97,8 +97,8 @@ export const openLocalServerStyleFolder = (path: string) =>
 export const browseLocalServerDirectory = (path: string) =>
   post<LocalServerDirectory>('browse', { path })
 
-export const reloadLocalServerWorkspace = (workspaceId: string) =>
-  post<LocalServerSnapshot>('reload', { workspaceId })
+export const reloadLocalServerWorkspace = (workspaceId: string, refreshOnly = false) =>
+  post<LocalServerSnapshot>('reload', { workspaceId, refreshOnly })
 
 export const reloadLocalServerStyleFolder = (folderId: string) =>
   post<LocalServerStyleSnapshot>('reload-style-folder', { folderId })

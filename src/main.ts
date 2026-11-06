@@ -1,3 +1,4 @@
+import { createDeferredCache } from './deferred-cache'
 import { optionalStorage } from './optional-storage'
 import {
   defaultValueCtx,
@@ -945,7 +946,7 @@ configureImageSourceResolver(resolveWorkspaceImageSource)
 configureMarkdownIncludes(resolveWorkspaceInclude)
 configureMermaidCsvResolver(resolveWorkspaceCsv)
 
-const persistWorkspace = () => {
+const writeWorkspaceCache = () => {
   if (activeShareCopyId) {
     scheduleShareCopyPersistence()
     return
@@ -959,6 +960,10 @@ const persistWorkspace = () => {
   }
   optionalStorage.setItem(ACTIVE_FILE_KEY, activeFileId)
 }
+
+const workspaceCache = createDeferredCache(writeWorkspaceCache)
+const persistWorkspace = () => workspaceCache.schedule()
+window.addEventListener('pagehide', () => workspaceCache.flush())
 
 const activeFile = () => workspaceFiles.find((file) => file.id === activeFileId)
   ?? (workspaceApplication.state.workspace ? undefined : workspaceFiles[0])
@@ -2495,11 +2500,16 @@ const evaluateCsvFile = async (file: WorkspaceFile) => {
   }
 }
 
+const evaluatedCsvInputs = new Map<string, string>()
 const refreshEvaluatedCsvSources = async () => {
   for (const file of workspaceFiles) {
-    if (file.kind === 'csv') {
+    if (file.kind === 'csv' && evaluatedCsvInputs.get(file.id) !== file.markdown) {
       evaluatedCsvSources.set(file.id, await evaluateCsvFile(file))
+      evaluatedCsvInputs.set(file.id, file.markdown)
     }
+  }
+  for (const id of evaluatedCsvInputs.keys()) {
+    if (!workspaceFiles.some((file) => file.id === id)) { evaluatedCsvInputs.delete(id); evaluatedCsvSources.delete(id) }
   }
   notifyMarkdownIncludesChanged()
   notifyMermaidCsvDataChanged()
@@ -4160,7 +4170,7 @@ const startEditor = async () => {
     persistActiveCsv()
     if (shareCopyPersistTimer !== undefined) window.clearTimeout(shareCopyPersistTimer)
     if (activeShareCopyId) void persistActiveShareCopy()
-    else persistWorkspace()
+    else { persistWorkspace(); workspaceCache.flush() }
     const file = activeFile()
     if (file && isDiskBackedFile(file) && documentSession.isDirty(file.id)) {
       void saveDiskFile(file)

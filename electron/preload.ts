@@ -53,9 +53,9 @@ const workspace: ElectronWorkspaceApi = {
     startingLocation,
   ),
   restore: () => invoke<WorkspaceSnapshot | undefined>(channels.restore),
-  reload: (workspaceId) => invoke<WorkspaceSnapshot>(
+  reload: (workspaceId, refreshOnly) => invoke<WorkspaceSnapshot>(
     channels.reload,
-    { workspaceId },
+    { workspaceId, refreshOnly },
   ),
   readFile: (workspaceId, name) => invoke<string>(
     channels.readFile,

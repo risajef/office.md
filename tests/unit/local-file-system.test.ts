@@ -250,3 +250,23 @@ describe('File System Access operations', () => {
     expect(root.entriesMap.has('before.md')).toBe(true)
   })
 })
+
+describe('incremental browser scanning', () => {
+  it('reuses text on refresh and forces a fresh read for Reload', async () => {
+    let reads = 0
+    const file = new File(['notes'], 'notes.md', { lastModified: 1 })
+    const handle = {
+      kind: 'file' as const, name: 'notes.md',
+      getFile: async () => ({ size: file.size, lastModified: file.lastModified, text: async () => { reads += 1; return 'notes' } }) as File,
+      createWritable: async () => ({ write: async () => undefined, close: async () => undefined }),
+    }
+    const directory = { kind: 'directory' as const, name: 'project', entries: async function* () { yield ['notes.md', handle] as [string, typeof handle] } }
+    const cache = new Map()
+    await readLocalWorkspace(directory, '', { cache })
+    await readLocalWorkspace(directory, '', { cache })
+    expect(reads).toBe(1)
+    await readLocalWorkspace(directory, '', { cache, force: true })
+    expect(reads).toBe(2)
+    await expect(readLocalWorkspace(directory, '', { limits: { maxTextBytes: 2 } })).rejects.toThrow('text limit')
+  })
+})

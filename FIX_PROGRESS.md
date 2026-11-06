@@ -14,7 +14,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F6 Cache failures block saves | Done | Nonthrowing storage boundary; full-cache autosave regression red then green and blocked-storage startup test; 192 unit tests, build, both browser cases and specs pass. |
 | F7 Unsafe mutation retries | Done | Removed automatic mutation reconnect/retry; lost document and image response tests pass; complete unit suite, build and specs pass. |
 | F8 Application/state boundaries | Done | Private document session state and one export pipeline; shared Node filesystem service and thin HTTP/Vite transport; 197 unit tests, Electron build, all 42 editor/HTTP browser tests and specs pass. |
-| F9 Workspace refresh/cache cost | Pending | |
+| F9 Workspace refresh/cache cost | Done | Incremental bounded Node/browser scans, deferred workspace caching and changed-only CSV evaluation; 201 unit tests, web/Electron builds, six refresh/cache browser tests and specs pass. |
 | F10 Standalone image export | Pending | |
 | F11 Branch/PR validation | Pending | |
 | A1 Electron sender/navigation policy | Pending | |

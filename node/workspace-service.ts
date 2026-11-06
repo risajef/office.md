@@ -1,3 +1,5 @@
+import { createWorkspaceScanner } from './workspace-scanner'
+import type { WorkspaceLimits } from '../src/workspace-budget'
 import { resolveWorkspaceTarget } from './workspace-path-policy'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
@@ -7,7 +9,6 @@ import {
   isEditableTextFile,
   isImageFile,
   isWorkspaceFile,
-  shouldSkipDirectory,
 } from '../src/editable-files'
 import type {
   WorkspaceFileSnapshot,
@@ -23,7 +24,7 @@ type WorkspaceRequestBase = { workspaceId: string }
 export type NodeWorkspaceRequest =
   | OpenWorkspaceRequest
   | RestoreWorkspaceRequest
-  | (WorkspaceRequestBase & { operation: 'reload' })
+  | (WorkspaceRequestBase & { operation: 'reload'; refreshOnly?: boolean })
   | (WorkspaceRequestBase & { operation: 'readFile'; name: string })
   | (WorkspaceRequestBase & { operation: 'readAssetUrl'; name: string })
   | (WorkspaceRequestBase & { operation: 'writeFile'; name: string; markdown: string })
@@ -53,7 +54,7 @@ export type NodeWorkspaceResponse =
 export type NodeWorkspaceService = {
   open: (rootPath: string) => Promise<WorkspaceSnapshot>
   restore: (rootPath?: string) => Promise<WorkspaceSnapshot | undefined>
-  reload: (workspaceId: string) => Promise<WorkspaceSnapshot>
+  reload: (workspaceId: string, refreshOnly?: boolean) => Promise<WorkspaceSnapshot>
   readFile: (workspaceId: string, name: string) => Promise<string>
   readAssetBytes: (workspaceId: string, name: string) => Promise<Uint8Array>
   readAssetUrl: (workspaceId: string, name: string) => Promise<string | undefined>
@@ -80,49 +81,7 @@ type OpenWorkspace = {
   info: WorkspaceInfo
   root: string
   diskContents: Map<string, string>
-}
-
-const readWorkspaceFiles = async (
-  root: string,
-  relative = '',
-): Promise<WorkspaceFileSnapshot[]> => {
-  const directory = path.join(root, relative)
-  const entries = await fs.readdir(directory, { withFileTypes: true })
-  const files: WorkspaceFileSnapshot[] = []
-  for (const entry of entries) {
-    const name = relative ? `${relative}/${entry.name}` : entry.name
-    if (entry.isDirectory()) {
-      if (!shouldSkipDirectory(entry.name)) {
-        files.push(...await readWorkspaceFiles(root, name))
-      }
-    } else if (
-      entry.isFile() &&
-      (isEditableTextFile(entry.name) || isImageFile(entry.name))
-    ) {
-      files.push({
-        name,
-        markdown: isImageFile(entry.name)
-          ? ''
-          : await fs.readFile(path.join(root, name), 'utf8'),
-      })
-    }
-  }
-  return files.sort((left, right) => left.name.localeCompare(right.name))
-}
-
-const readWorkspaceDirectories = async (
-  root: string,
-  relative = '',
-): Promise<string[]> => {
-  const directory = path.join(root, relative)
-  const directories: string[] = []
-  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-    if (!entry.isDirectory() || shouldSkipDirectory(entry.name)) continue
-    const name = relative ? `${relative}/${entry.name}` : entry.name
-    directories.push(name)
-    directories.push(...await readWorkspaceDirectories(root, name))
-  }
-  return directories.sort((left, right) => left.localeCompare(right))
+  scanner: ReturnType<typeof createWorkspaceScanner>
 }
 
 const resolveWorkspaceDirectory = async (root: string, name: string) => {
@@ -144,8 +103,8 @@ const resolveWorkspaceDirectory = async (root: string, name: string) => {
   return { path: resolved, name: normalizedName }
 }
 
-const createSnapshot = async (workspace: OpenWorkspace): Promise<WorkspaceSnapshot> => {
-  const files = await readWorkspaceFiles(workspace.root)
+const createSnapshot = async (workspace: OpenWorkspace, force = false): Promise<WorkspaceSnapshot> => {
+  const { files, directories } = await workspace.scanner.scan(force)
   workspace.diskContents = new Map(
     files
       .filter((file) => isEditableTextFile(file.name))
@@ -154,7 +113,7 @@ const createSnapshot = async (workspace: OpenWorkspace): Promise<WorkspaceSnapsh
   return {
     workspace: { ...workspace.info },
     files,
-    directories: await readWorkspaceDirectories(workspace.root),
+    directories,
   }
 }
 
@@ -170,7 +129,7 @@ const entryExists = async (target: string) => {
   }
 }
 
-export const createNodeWorkspaceService = (): NodeWorkspaceService => {
+export const createNodeWorkspaceService = (limits?: Partial<WorkspaceLimits>): NodeWorkspaceService => {
   const workspaces = new Map<string, OpenWorkspace>()
 
   const requireWorkspace = (workspaceId: string) => {
@@ -189,7 +148,7 @@ export const createNodeWorkspaceService = (): NodeWorkspaceService => {
       path: root,
       name: path.basename(root) || root,
     }
-    const workspace = { info, root, diskContents: new Map<string, string>() }
+    const workspace = { info, root, diskContents: new Map<string, string>(), scanner: createWorkspaceScanner(root, limits) }
     workspaces.set(info.id, workspace)
     return createSnapshot(workspace)
   }
@@ -199,8 +158,8 @@ export const createNodeWorkspaceService = (): NodeWorkspaceService => {
     return open(rootPath)
   }
 
-  const reload = async (workspaceId: string) =>
-    createSnapshot(requireWorkspace(workspaceId))
+  const reload = async (workspaceId: string, refreshOnly = false) =>
+    createSnapshot(requireWorkspace(workspaceId), !refreshOnly)
 
   const readFile = async (workspaceId: string, name: string) => {
     if (!isEditableTextFile(name)) throw new Error('The file name is invalid.')
@@ -395,8 +354,8 @@ export const createNodeWorkspaceService = (): NodeWorkspaceService => {
       case 'restore':
         return restore((request as RestoreWorkspaceRequest).path)
       case 'reload': {
-        const value = request as WorkspaceRequestBase
-        return reload(value.workspaceId)
+        const value = request as WorkspaceRequestBase & { refreshOnly?: boolean }
+        return reload(value.workspaceId, value.refreshOnly)
       }
       case 'readFile': {
         const value = request as WorkspaceRequestBase & { name: string }
