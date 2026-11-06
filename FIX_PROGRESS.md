@@ -23,6 +23,8 @@ Each finding is implemented and committed separately, with regression evidence a
 | A4 Session disposal | Done | Replaced/closed disk and style sessions are revoked after successful selection; explicit host close and late-refresh guards; 213 unit tests, Electron build and all 12 sharing/Desktop workflows pass. |
 | A5 IPC payload validation | Done | Typed parsers validate workspace/style records, picker hints and bounded ZIP metadata/bytes before effects; 225 unit tests, Electron build, all eight desktop/HTTP integration tests and specs pass. |
 
+| F9b CSV cache invalidation on reopen | Done | Reopening the same workspace now rebuilds missing CSV evaluations; browser regression red then green; 225 unit tests, build and specs pass. |
+
 ## Environment
 
 Restored locked dependencies with `npm ci`; package manifest and lockfile unchanged. Generated build/test output remains ignored. All work starts at subrepo revision `46132f1`.

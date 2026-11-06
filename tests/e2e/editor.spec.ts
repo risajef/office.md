@@ -644,6 +644,21 @@ base.describe('local filesystem bridge', () => {
 })
 
 test.describe('disk-backed editor workflows', () => {
+  test('restores evaluated CSV includes when reopening the same workspace', async ({ page, workspace }) => {
+    await writeFile(workspace.file('z-values.csv'), 'value,total\n21,=A2*2\n')
+    await expect(page.locator('.file-select[title="Open z-values.csv"]')).toBeVisible({ timeout: 6_000 })
+    await editMarkdownSource(page, '# Formula include\n\n![[z-values.csv]]')
+    await expect(page.locator('.markdown-include-content')).toContainText('42')
+    await page.locator('.editor-card [data-project-action="store"]').click()
+    await page.locator('#open-folder').click()
+    const picker = page.locator('.folder-picker-dialog')
+    await expect(picker).toBeVisible()
+    await picker.getByLabel('Folder path').fill(workspace.directory)
+    await picker.getByLabel('Folder path').press('Enter')
+    await picker.getByRole('button', { name: 'Open this folder' }).click()
+    await page.locator('.file-select[title="Open document.md"]').click()
+    await expect(page.locator('.markdown-include-content')).toContainText('42')
+  })
   test('starts with workspace actions when browser storage access is blocked', async ({ page }) => {
     await page.addInitScript(() => {
       Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Blocked', 'SecurityError') } })

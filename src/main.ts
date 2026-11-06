@@ -2504,7 +2504,7 @@ const evaluateCsvFile = async (file: WorkspaceFile) => {
 const evaluatedCsvInputs = new Map<string, string>()
 const refreshEvaluatedCsvSources = async () => {
   for (const file of workspaceFiles) {
-    if (file.kind === 'csv' && evaluatedCsvInputs.get(file.id) !== file.markdown) {
+    if (file.kind === 'csv' && (!evaluatedCsvSources.has(file.id) || evaluatedCsvInputs.get(file.id) !== file.markdown)) {
       evaluatedCsvSources.set(file.id, await evaluateCsvFile(file))
       evaluatedCsvInputs.set(file.id, file.markdown)
     }
