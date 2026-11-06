@@ -33,6 +33,25 @@ const createApplication = () => createWorkspaceApplication(
 )
 
 describe('WorkspaceApplication', () => {
+  it('does not apply an old save completion to a newly opened workspace', async () => {
+    let finish!: () => void
+    let sequence = 0
+    const port = createMemoryWorkspacePort({ path: '/first', name: 'first', files: [] })
+    port.open = async () => ({
+      workspace: { id: String(++sequence), name: 'workspace', path: '/workspace' },
+      files: [{ name: 'notes.md', markdown: sequence === 1 ? 'first' : 'second' }],
+      directories: [],
+    })
+    port.writeFile = async () => new Promise<void>((resolve) => { finish = resolve })
+    const app = createWorkspaceApplication(port)
+    await app.open()
+    const saving = app.saveFile('notes.md', 'late first revision')
+    await app.open()
+    finish()
+    await saving
+    expect(app.file('notes.md')?.markdown).toBe('second')
+  })
+
   it('opens, saves, and reloads source without evaluating away CSV formulas', async () => {
     const application = createApplication()
 

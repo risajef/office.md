@@ -77,6 +77,7 @@ import {
 import { CsvContextToolbar } from './csv-context-toolbar'
 import { requestChoice } from './choice-dialog'
 import { createPortableMarkdown } from './portable-markdown'
+import { createDocumentSaveController } from './document-save-controller'
 import { createShareArchive, openShareArchive } from './share-archive'
 import {
   createShareId,
@@ -671,6 +672,10 @@ const editorRuntime = createEditorRuntime(
   createRuntimeStyleFolderPort(),
 )
 const workspaceApplication = editorRuntime.workspace
+const documentSaves = createDocumentSaveController({
+  workspaceId: () => workspaceApplication.state.workspace?.id,
+  writeFile: (name, markdown) => workspaceApplication.saveFile(name, markdown),
+})
 const styleFolderApplication = editorRuntime.styleFolder
 const isElectronRuntime = editorRuntime.styleFolderPort?.host === 'electron'
 if (isElectronRuntime) {
@@ -2130,10 +2135,13 @@ const saveDiskFile = async (
   if (workspaceConflicts.has(file.id)) return false
 
   try {
-    await workspaceApplication.saveFile(file.name, file.markdown)
-    dirtyDiskFiles.delete(file.id)
-    cleanMarkdownByFile.set(file.id, file.markdown)
-    return true
+    const id = file.id
+    const saved = await documentSaves.save(file)
+    if (!saved.workspaceCurrent || file.id !== id) return false
+    cleanMarkdownByFile.set(id, saved.markdown)
+    if (saved.current) dirtyDiskFiles.delete(id)
+    else dirtyDiskFiles.add(id)
+    return saved.current
   } catch (error) {
     if (error instanceof WorkspaceFileConflictError) {
       setWorkspaceConflict(file, error.diskFileExists, error.diskContents)

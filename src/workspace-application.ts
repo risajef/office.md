@@ -145,8 +145,9 @@ export const createWorkspaceApplication = (
       return file ? { ...file } : undefined
     },
     async saveFile(name, markdown) {
+      const workspaceId = requireSnapshot().workspace.id
       await port.writeFile(name, markdown)
-      updateSnapshotFile(name, markdown)
+      if (currentSnapshot?.workspace.id === workspaceId) updateSnapshotFile(name, markdown)
     },
     async saveImageAsset(directory, suggestedName, bytes) {
       const name = await port.saveImageAsset(directory, suggestedName, bytes)
