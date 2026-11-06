@@ -2,11 +2,13 @@ import { csvToMarkdownTable } from './csv-utils'
 import { createPortableMarkdown } from './portable-markdown'
 import { createDocumentExportHtml, type DocumentExportLayout } from './document-export'
 import type { WorkspaceFileSnapshot } from './workspace-port'
+import { materializeExportImages } from './export-images'
 
 /** One export pipeline supplied with current editable contents, including drafts. */
 export const createDocumentExportApplication = (options: {
   files: () => WorkspaceFileSnapshot[]
   csvSource?: (file: WorkspaceFileSnapshot) => string
+  imageSource?: (source: string) => Promise<string | undefined>
 }) => {
   const find = (name: string, csvOnly = false) => {
     const requested = name.trim().replace(/^\.\//, '')
@@ -31,8 +33,9 @@ export const createDocumentExportApplication = (options: {
         },
       })
     },
-    html(name: string, editorRoot: HTMLElement, layout: DocumentExportLayout) {
-      return createDocumentExportHtml({ editorRoot, title: name, layout })
+    async html(name: string, editorRoot: HTMLElement, layout: DocumentExportLayout) {
+      const packaged = await materializeExportImages(editorRoot, options.imageSource)
+      return createDocumentExportHtml({ editorRoot: packaged, title: name, layout })
     },
   }
 }

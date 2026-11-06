@@ -201,7 +201,7 @@ describe('WorkspaceApplication', () => {
     const editorRoot = document.createElement('div')
     editorRoot.id = 'editor'
     editorRoot.innerHTML = '<div class="milkdown"><div class="ProseMirror"><h1>Report</h1></div></div>'
-    const html = application.createDocumentExportHtml('report.md', editorRoot, {
+    const html = await application.createDocumentExportHtml('report.md', editorRoot, {
       width: 794,
       height: 1123,
       margin: 56,

@@ -39,7 +39,7 @@ export type WorkspaceApplication = {
     name: string,
     editorRoot: HTMLElement,
     layout: DocumentExportLayout,
-  ) => string
+  ) => Promise<string>
 }
 
 const copySnapshot = (snapshot: WorkspaceSnapshot): WorkspaceSnapshot => ({

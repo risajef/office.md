@@ -868,6 +868,7 @@ const csvSourceForFile = (file: WorkspaceFile) =>
 
 const documentExports = createDocumentExportApplication({
   files: () => workspaceFiles,
+  imageSource: (source) => resolveWorkspaceImageSource(source),
   csvSource: (file) => {
     const current = workspaceFiles.find((candidate) => candidate.name === file.name)
     return current ? csvSourceForFile(current) : file.markdown

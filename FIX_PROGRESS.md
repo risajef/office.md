@@ -15,7 +15,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F7 Unsafe mutation retries | Done | Removed automatic mutation reconnect/retry; lost document and image response tests pass; complete unit suite, build and specs pass. |
 | F8 Application/state boundaries | Done | Private document session state and one export pipeline; shared Node filesystem service and thin HTTP/Vite transport; 197 unit tests, Electron build, all 42 editor/HTTP browser tests and specs pass. |
 | F9 Workspace refresh/cache cost | Done | Incremental bounded Node/browser scans, deferred workspace caching and changed-only CSV evaluation; 201 unit tests, web/Electron builds, six refresh/cache browser tests and specs pass. |
-| F10 Standalone image export | Pending | |
+| F10 Standalone image export | Done | Async export embeds local images, preserves remote URLs and reports missing assets; full unit suite/build and fresh-context network-blocked browser export tests pass. |
 | F11 Branch/PR validation | Pending | |
 | A1 Electron sender/navigation policy | Pending | |
 | A2 Theme containment | Pending | |

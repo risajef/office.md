@@ -1339,6 +1339,25 @@ test.describe('rich document behavior', () => {
     )
   })
 
+  test('exports workspace images that load without the originating workspace session', async ({ page, browser }) => {
+    await editMarkdownSource(page, '# Portable image\n\n![sample](sample.svg)')
+    await expect(page.locator('.ProseMirror img[alt="sample"]')).toHaveAttribute('src', /__office_md_fs/)
+    const downloading = page.waitForEvent('download')
+    await page.locator('.editor-card [data-file-export]').click()
+    await page.locator('.choice-dialog-option', { hasText: 'HTML' }).click()
+    const download = await downloading
+    const html = await readFile(await download.path() as string, 'utf8')
+    expect(html).toContain('data:image/svg+xml;base64,')
+    expect(html).not.toContain('/__office_md_fs/asset?')
+    const context = await browser.newContext()
+    try {
+      const standalone = await context.newPage()
+      await standalone.route('**/*', (route) => route.abort())
+      await standalone.setContent(html)
+      await expect.poll(() => standalone.locator('img[alt="sample"]').evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(24)
+    } finally { await context.close() }
+  })
+
   test('renders and removes includes, and table toolbar actions mutate the table', async ({
     page,
   }) => {
