@@ -77,8 +77,8 @@ import {
 } from './csv-utils'
 import { CsvContextToolbar } from './csv-context-toolbar'
 import { requestChoice } from './choice-dialog'
-import { createPortableMarkdown } from './portable-markdown'
-import { createDocumentSaveController } from './document-save-controller'
+import { createDocumentExportApplication } from './document-export-application'
+import { createDocumentSession, type WorkspaceConflict } from './document-session'
 import { createShareArchive, openShareArchive } from './share-archive'
 import {
   createShareId,
@@ -99,7 +99,6 @@ import {
 import { createDefaultShareCopyRepository } from './share-copy-store'
 import { createShareUrl, decodeShareUrl } from './share-url'
 import {
-  createDocumentExportHtml,
   printDocumentHtml,
   type DocumentExportLayout,
 } from './document-export'
@@ -528,14 +527,6 @@ type WorkspaceFile = {
   binaryContent?: string
 }
 
-type WorkspaceConflict = {
-  fileId: string
-  fileName: string
-  localMarkdown: string
-  diskFileExists: boolean
-  diskMarkdown?: string
-}
-
 const exampleMarkdownFiles = Object.entries(exampleMarkdownModules)
   .map(([path, markdown]) => ({
     id: `example:${path}`,
@@ -664,7 +655,7 @@ const editorRuntime = createEditorRuntime(
   createRuntimeStyleFolderPort(),
 )
 const workspaceApplication = editorRuntime.workspace
-const documentSaves = createDocumentSaveController({
+const documentSession = createDocumentSession({
   workspaceId: () => workspaceApplication.state.workspace?.id,
   writeFile: (name, markdown) => workspaceApplication.saveFile(name, markdown),
 })
@@ -706,9 +697,6 @@ if (!workspaceFiles.some((file) => file.id === activeFileId)) {
 }
 
 let workspaceCacheUnavailable = false
-const dirtyDiskFiles = new Set<string>()
-const cleanMarkdownByFile = new Map<string, string>()
-const workspaceConflicts = new Map<string, WorkspaceConflict>()
 const evaluatedCsvSources = new Map<string, string>()
 const collapsedFolders = new Set<string>()
 let workspaceActionPending = false
@@ -876,6 +864,14 @@ const imageKinds = new Set<WorkspaceFile['kind']>(['image'])
 
 const csvSourceForFile = (file: WorkspaceFile) =>
   evaluatedCsvSources.get(file.id) ?? file.markdown
+
+const documentExports = createDocumentExportApplication({
+  files: () => workspaceFiles,
+  csvSource: (file) => {
+    const current = workspaceFiles.find((candidate) => candidate.name === file.name)
+    return current ? csvSourceForFile(current) : file.markdown
+  },
+})
 
 const resolveWorkspaceInclude = (fileName: string) => {
   const file = findWorkspaceFile(fileName, markdownAndCsvKinds)
@@ -2053,8 +2049,8 @@ const setCsvStatus = (
 const renderWorkspaceConflicts = (editor: EditorInstance) => {
   if (!workspaceConflictsElement) return
   workspaceConflictsElement.replaceChildren()
-  workspaceConflictsElement.hidden = workspaceConflicts.size === 0
-  for (const conflict of workspaceConflicts.values()) {
+  workspaceConflictsElement.hidden = documentSession.conflicts.length === 0
+  for (const conflict of documentSession.conflicts) {
     const notice = document.createElement('section')
     notice.className = 'workspace-conflict'
     notice.dataset.workspaceConflict = conflict.fileName
@@ -2093,7 +2089,7 @@ const setWorkspaceConflict = (
     ? getMarkdown(workspaceEditor)
     : file.markdown
   file.markdown = localMarkdown
-  workspaceConflicts.set(file.id, {
+  documentSession.setConflict(file.id, {
     fileId: file.id,
     fileName: file.name,
     localMarkdown,
@@ -2109,16 +2105,10 @@ const saveDiskFile = async (
   _options: { requestPermission?: boolean } = {},
 ) => {
   if (!isDiskBackedFile(file)) return true
-  if (workspaceConflicts.has(file.id)) return false
+  if (documentSession.conflict(file.id)) return false
 
   try {
-    const id = file.id
-    const saved = await documentSaves.save(file)
-    if (!saved.workspaceCurrent || file.id !== id) return false
-    cleanMarkdownByFile.set(id, saved.markdown)
-    if (saved.current) dirtyDiskFiles.delete(id)
-    else dirtyDiskFiles.add(id)
-    return saved.current
+    return await documentSession.save(file)
   } catch (error) {
     if (error instanceof WorkspaceFileConflictError) {
       setWorkspaceConflict(file, error.diskFileExists, error.diskContents)
@@ -2126,7 +2116,7 @@ const saveDiskFile = async (
     }
     console.error(`Could not store ${file.name}.`, error)
     const message = error instanceof Error ? error.message : `Could not store ${file.name}.`
-    dirtyDiskFiles.add(file.id)
+    documentSession.markDirty(file.id)
     setStatus(message, 'ready')
     setCsvStatus(message, 'ready')
     return false
@@ -2447,7 +2437,7 @@ const syncCsvFile = (
   // separate cache used by previews, includes, and portable exports.
   file.markdown = serializeCsv(csvRowsFromWorksheet(worksheet, false))
   evaluatedCsvSources.set(file.id, evaluatedCsvFromWorksheet(worksheet))
-  if (isDiskBackedFile(file)) dirtyDiskFiles.add(file.id)
+  if (isDiskBackedFile(file)) documentSession.markDirty(file.id)
   persistWorkspace()
   notifyMarkdownIncludesChanged()
   notifyMermaidCsvDataChanged()
@@ -2456,11 +2446,11 @@ const syncCsvFile = (
   } else {
     setCsvStatus(
       isDiskBackedFile(file)
-        ? dirtyDiskFiles.has(file.id)
+        ? documentSession.isDirty(file.id)
           ? 'Edited locally · use Store to write to disk'
           : 'Stored on disk'
         : 'Saved in browser storage',
-      dirtyDiskFiles.has(file.id) ? 'ready' : 'saved',
+      documentSession.isDirty(file.id) ? 'ready' : 'saved',
     )
   }
 }
@@ -2572,30 +2562,14 @@ const createPagedDocumentHtml = async (
         '.page-layout-gap[data-page-break]',
       ).length + 1,
     }
-    return createDocumentExportHtml({
-      editorRoot,
-      title: file.name,
-      layout,
-    })
+    return documentExports.html(file.name, editorRoot, layout)
   } finally {
     exportPageLayoutOverride = undefined
     editor.action((ctx) => requestPageLayoutRefresh(ctx.get(editorViewCtx)))
   }
 }
 
-const portableMarkdownFor = (file: WorkspaceFile) => createPortableMarkdown(
-  file.markdown,
-  {
-    resolveInclude: (fileName) => {
-      const included = findWorkspaceFile(fileName, markdownAndCsvKinds)
-      if (!included) return undefined
-      return included.kind === 'csv'
-        ? csvToMarkdownTable(csvSourceForFile(included))
-        : included.markdown
-    },
-    resolveCsv: resolveWorkspaceCsv,
-  },
-)
+const portableMarkdownFor = (file: WorkspaceFile) => documentExports.portableMarkdown(file.name)
 
 const exportActiveFile = async (editor: EditorInstance) => {
   persistActiveCsv()
@@ -2714,7 +2688,7 @@ const openFile = (editor: EditorInstance, fileId: string) => {
     }
     persistActiveCsv()
     persistWorkspace()
-    if (isDiskBackedFile(current) && dirtyDiskFiles.has(current.id)) {
+    if (isDiskBackedFile(current) && documentSession.isDirty(current.id)) {
       void saveDiskFile(current)
     }
   }
@@ -2740,8 +2714,9 @@ const openFile = (editor: EditorInstance, fileId: string) => {
   renderFileList(editor)
   renderPageFormatOptions()
   loadMarkdown(editor, file.markdown)
-  cleanMarkdownByFile.set(file.id, getMarkdown(editor))
-  dirtyDiskFiles.delete(file.id)
+  if (!documentSession.isDirty(file.id) && !documentSession.conflict(file.id)) {
+    documentSession.markClean(file.id, getMarkdown(editor))
+  }
   setStatus(isDiskBackedFile(file) ? 'Loaded from disk' : 'Opened locally', 'ready')
 }
 
@@ -2761,12 +2736,7 @@ const migrateRenamedFileIdentity = (
   if (activeFileId === oldId) activeFileId = newId
   if (lastMarkdownFileId === oldId) lastMarkdownFileId = newId
   if (activeCsvFileId === oldId) activeCsvFileId = newId
-  if (dirtyDiskFiles.delete(oldId)) dirtyDiskFiles.add(newId)
-  const clean = cleanMarkdownByFile.get(oldId)
-  if (clean !== undefined) {
-    cleanMarkdownByFile.delete(oldId)
-    cleanMarkdownByFile.set(newId, clean)
-  }
+  documentSession.rename(oldId, newId)
   if (evaluatedCsvSources.has(oldId)) {
     const evaluated = evaluatedCsvSources.get(oldId) as string
     evaluatedCsvSources.delete(oldId)
@@ -2822,7 +2792,7 @@ const renameFile = async (editor: EditorInstance, fileId: string) => {
   if (file.kind === 'markdown' && file.id === activeFileId) {
     file.markdown = getMarkdown(editor)
   }
-  if (isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
+  if (isDiskBackedFile(file) && documentSession.isDirty(file.id)) {
     await saveDiskFile(file)
   }
 
@@ -3003,8 +2973,7 @@ const deleteWorkspaceFile = async (editor: EditorInstance, fileId: string) => {
     }
     const index = workspaceFiles.findIndex((candidate) => candidate.id === file.id)
     if (index >= 0) workspaceFiles.splice(index, 1)
-    dirtyDiskFiles.delete(file.id)
-    cleanMarkdownByFile.delete(file.id)
+    documentSession.remove(file.id)
     evaluatedCsvSources.delete(file.id)
     delete pageSettingsByFile[file.id]
     persistPageSettings()
@@ -3153,9 +3122,7 @@ const loadWorkspaceFromSnapshot = async (
     activeShareWorkspaceName = 'Shared workspace'
     shareCopyPersistenceUnavailable = false
   }
-  dirtyDiskFiles.clear()
-  cleanMarkdownByFile.clear()
-  workspaceConflicts.clear()
+  documentSession.reset()
   if (options.editor) renderWorkspaceConflicts(options.editor)
   if (options.editor && activeCsvWorksheet) destroyCsvEditor()
   if (newFolderButton) newFolderButton.disabled = false
@@ -3198,11 +3165,11 @@ const loadWorkspaceFromSnapshot = async (
 }
 
 const workspaceFileHasLocalEdits = (editor: EditorInstance, file: WorkspaceFile) => {
-  if (!dirtyDiskFiles.has(file.id)) return false
+  if (!documentSession.isDirty(file.id)) return false
   if (file.kind === 'markdown' && activeFile()?.id === file.id) {
     file.markdown = getMarkdown(editor)
   }
-  const cleanMarkdown = cleanMarkdownByFile.get(file.id)
+  const cleanMarkdown = documentSession.clean(file.id)
   return cleanMarkdown === undefined || file.markdown !== cleanMarkdown
 }
 
@@ -3241,12 +3208,11 @@ const reconcileWorkspaceSnapshot = async (
       continue
     }
 
-    const conflict = workspaceConflicts.get(file.id)
+    const conflict = documentSession.conflict(file.id)
     const diskChanged = !knownDiskFile || knownDiskFile.markdown !== incoming.markdown
     if (conflict) {
       if (diskChanged || !conflict.diskFileExists || conflict.diskMarkdown !== incoming.markdown) {
-        conflict.diskFileExists = true
-        conflict.diskMarkdown = incoming.markdown
+        documentSession.updateConflict(file.id, { diskFileExists: true, diskMarkdown: incoming.markdown })
         renderWorkspaceConflicts(editor)
       }
       continue
@@ -3260,13 +3226,12 @@ const reconcileWorkspaceSnapshot = async (
     }
 
     file.markdown = incoming.markdown
-    cleanMarkdownByFile.set(file.id, incoming.markdown)
-    dirtyDiskFiles.delete(file.id)
+    documentSession.markClean(file.id, incoming.markdown)
     changed = true
     if (activeFile()?.id === file.id) {
       if (file.kind === 'markdown') {
         loadMarkdown(editor, incoming.markdown, { focus: false })
-        cleanMarkdownByFile.set(file.id, getMarkdown(editor))
+        documentSession.markClean(file.id, getMarkdown(editor))
         activeDocumentUpdated = true
       } else if (file.kind === 'csv') {
         activeCsvUpdated = true
@@ -3280,10 +3245,9 @@ const reconcileWorkspaceSnapshot = async (
 
   for (const file of [...workspaceFiles]) {
     if (file.source !== 'disk' || nextFiles.has(file.name)) continue
-    const conflict = workspaceConflicts.get(file.id)
+    const conflict = documentSession.conflict(file.id)
     if (conflict) {
-      conflict.diskFileExists = false
-      conflict.diskMarkdown = undefined
+      documentSession.updateConflict(file.id, { diskFileExists: false, diskMarkdown: undefined })
       renderWorkspaceConflicts(editor)
       continue
     }
@@ -3294,8 +3258,7 @@ const reconcileWorkspaceSnapshot = async (
     }
     if (activeFile()?.id === file.id) activeFileRemoved = true
     workspaceFiles.splice(workspaceFiles.indexOf(file), 1)
-    dirtyDiskFiles.delete(file.id)
-    cleanMarkdownByFile.delete(file.id)
+    documentSession.remove(file.id)
     changed = true
   }
 
@@ -3332,7 +3295,7 @@ const reconcileWorkspaceSnapshot = async (
     const file = activeFile()
     setStatus(`${file?.name ?? 'Document'} updated externally`, 'saved')
     if (file?.kind === 'csv') setCsvStatus(`${file.name} updated externally`, 'saved')
-  } else if (changed && workspaceConflicts.size === 0) {
+  } else if (changed && documentSession.conflicts.length === 0) {
     setStatus('Workspace updated externally', 'saved')
   }
 }
@@ -3342,7 +3305,7 @@ const resolveWorkspaceConflict = async (
   fileId: string,
   choice: 'disk' | 'local',
 ) => {
-  const conflict = workspaceConflicts.get(fileId)
+  const conflict = documentSession.conflict(fileId)
   const file = workspaceFiles.find((candidate) => candidate.id === fileId)
   if (!conflict || !file) return false
   const localMarkdown = file.kind === 'markdown' && activeFile()?.id === file.id
@@ -3367,17 +3330,15 @@ const resolveWorkspaceConflict = async (
     if (choice === 'local') {
       file.markdown = localMarkdown
       await workspaceApplication.saveFile(file.name, localMarkdown)
-      cleanMarkdownByFile.set(file.id, localMarkdown)
-      dirtyDiskFiles.delete(file.id)
-      workspaceConflicts.delete(fileId)
+      documentSession.markClean(file.id, localMarkdown)
+      documentSession.clearConflict(fileId)
       setStatus(`Kept your version of ${file.name}`, 'saved')
     } else if (diskFile) {
       file.markdown = file.kind === 'markdown'
         ? normalizeMarkdownBreaks(diskFile.markdown)
         : diskFile.markdown
-      cleanMarkdownByFile.set(file.id, file.markdown)
-      dirtyDiskFiles.delete(file.id)
-      workspaceConflicts.delete(fileId)
+      documentSession.markClean(file.id, file.markdown)
+      documentSession.clearConflict(fileId)
       if (activeFile()?.id === file.id) {
         if (file.kind === 'markdown') loadMarkdown(editor, file.markdown, { focus: false })
         else if (file.kind === 'csv') {
@@ -3390,9 +3351,8 @@ const resolveWorkspaceConflict = async (
     } else {
       const wasActive = activeFile()?.id === file.id
       workspaceFiles.splice(workspaceFiles.indexOf(file), 1)
-      dirtyDiskFiles.delete(file.id)
-      cleanMarkdownByFile.delete(file.id)
-      workspaceConflicts.delete(fileId)
+      documentSession.remove(file.id)
+      documentSession.clearConflict(fileId)
       if (wasActive) activateAvailableWorkspaceFile(editor)
       setStatus(`Closed removed file ${file.name}`, 'saved')
     }
@@ -3891,12 +3851,12 @@ const startEditor = async () => {
           const file = activeFile()
           if (file) {
             file.markdown = markdown
-            const conflict = workspaceConflicts.get(file.id)
-            if (conflict) conflict.localMarkdown = markdown
+            const conflict = documentSession.conflict(file.id)
+            if (conflict) documentSession.updateConflict(file.id, { localMarkdown: markdown })
             if (isDiskBackedFile(file) && !isLoadingMarkdown) {
-              const clean = cleanMarkdownByFile.get(file.id)
+              const clean = documentSession.clean(file.id)
               if (clean === undefined || markdown !== clean) {
-                dirtyDiskFiles.add(file.id)
+                documentSession.markDirty(file.id)
               }
             }
           }
@@ -3908,7 +3868,7 @@ const startEditor = async () => {
         onSaving: () => {
           if (isLoadingMarkdown) return
           const file = activeFile()
-          if (isDiskBackedFile(file) && !dirtyDiskFiles.has(file?.id ?? '')) return
+          if (isDiskBackedFile(file) && !documentSession.isDirty(file?.id ?? '')) return
           setStatus(
             isDiskBackedFile(file) ? 'Saving to disk…' : 'Saving locally…',
             'saving',
@@ -3920,7 +3880,7 @@ const startEditor = async () => {
           const file = activeFile()
           if (!file) return
           if (isDiskBackedFile(file)) {
-            if (!dirtyDiskFiles.has(file.id)) return
+            if (!documentSession.isDirty(file.id)) return
             const saved = await saveDiskFile(file)
             if (saved) {
               setStatus('Stored on disk', 'saved')
@@ -3941,8 +3901,7 @@ const startEditor = async () => {
   const cleanupImageDrop = configureImageDrop(editor)
   configureDiagramCommand(() => addMermaidDiagram(editor))
   if (currentMarkdownFile) {
-    cleanMarkdownByFile.set(currentMarkdownFile.id, getMarkdown(editor))
-    dirtyDiskFiles.delete(currentMarkdownFile.id)
+    documentSession.markClean(currentMarkdownFile.id, getMarkdown(editor))
   }
   configureMarkdownIncludeRenderer((markdown) =>
     editor.action((ctx) => ctx.get(parserCtx)(markdown)),
@@ -3991,7 +3950,7 @@ const startEditor = async () => {
       const rendered = getMarkdown(editor)
       file.markdown = rendered
       if (rendered !== previous && isDiskBackedFile(file)) {
-        dirtyDiskFiles.add(file.id)
+        documentSession.markDirty(file.id)
       }
       persistWorkspace()
       notifyMarkdownIncludesChanged()
@@ -4203,7 +4162,7 @@ const startEditor = async () => {
     if (activeShareCopyId) void persistActiveShareCopy()
     else persistWorkspace()
     const file = activeFile()
-    if (file && isDiskBackedFile(file) && dirtyDiskFiles.has(file.id)) {
+    if (file && isDiskBackedFile(file) && documentSession.isDirty(file.id)) {
       void saveDiskFile(file)
     }
     cleanupImageDrop()

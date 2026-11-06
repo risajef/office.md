@@ -1,9 +1,5 @@
-import { csvToMarkdownTable } from './csv-utils'
-import {
-  createDocumentExportHtml as buildDocumentExportHtml,
-  type DocumentExportLayout,
-} from './document-export'
-import { createPortableMarkdown as buildPortableMarkdown } from './portable-markdown'
+import { createDocumentExportApplication } from './document-export-application'
+import type { DocumentExportLayout } from './document-export'
 import type {
   WorkspaceFileSnapshot,
   WorkspaceInfo,
@@ -113,6 +109,8 @@ export const createWorkspaceApplication = (
     }
   }
 
+  const exports = createDocumentExportApplication({ files: () => currentSnapshot?.files ?? [] })
+
   return {
     get state() {
       return copyState(currentSnapshot)
@@ -185,31 +183,7 @@ export const createWorkspaceApplication = (
         ...snapshot.directories.filter((directory) => directory !== name),
       )
     },
-    createPortableMarkdown(name) {
-      const snapshot = requireSnapshot()
-      const file = requireFile(snapshot, name)
-      return buildPortableMarkdown(file.markdown, {
-        resolveInclude: (includeName) => {
-          const included = findFile(snapshot, includeName)
-          if (!included) return undefined
-          return included.name.toLowerCase().endsWith('.csv')
-            ? csvToMarkdownTable(included.markdown)
-            : included.markdown
-        },
-        resolveCsv: (csvName) => {
-          const csv = findFile(snapshot, csvName)
-          return csv?.name.toLowerCase().endsWith('.csv') ? csv.markdown : undefined
-        },
-      })
-    },
-    createDocumentExportHtml(name, editorRoot, layout) {
-      const snapshot = requireSnapshot()
-      const file = requireFile(snapshot, name)
-      return buildDocumentExportHtml({
-        editorRoot,
-        title: file.name,
-        layout,
-      })
-    },
+    createPortableMarkdown: (name) => exports.portableMarkdown(name),
+    createDocumentExportHtml: (name, editorRoot, layout) => exports.html(name, editorRoot, layout),
   }
 }

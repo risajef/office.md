@@ -226,13 +226,15 @@ The full contributor routine and runtime layering are documented in [`docs/devel
 
 - `src/main.ts` — shared renderer/editor integration and UI orchestration.
 - `src/workspace-application.ts` and `src/editor-runtime.ts` — host-neutral workspace actions and runtime composition.
+- `src/document-session.ts` and `src/document-save-controller.ts` — document dirty/conflict state and serialized revision acknowledgements. Editable session contents are distinct from the application's last observed disk snapshot.
 - `src/workspace-port.ts` — public workspace capability contract and deterministic test fake.
 - `src/web-workspace-port.ts` — local Vite bridge and browser File System Access adapters.
 - `src/electron-workspace-port.ts` — renderer-side adapter for the secure Electron bridge.
-- `electron/main.ts`, `electron/preload.ts`, and `electron/workspace-service.ts` — desktop shell, allowlisted IPC bridge, and validated filesystem service.
+- `electron/main.ts` and `electron/preload.ts` — desktop shell and allowlisted IPC transport.
+- `node/workspace-service.ts` and `node/workspace-path-policy.ts` — shared filesystem behavior and confinement for both Node hosts; `electron/workspace-service.ts` retains the existing import boundary.
 - `src/plugins/` — Milkdown views for Mermaid, includes, LaTeX, rich content, and page layout.
 - `src/csv-utils.ts` — CSV parser, serializer, Markdown conversion, and Mermaid expansion.
 - `src/local-file-system.ts` — browser File System Access implementation.
-- `vite.config.ts` — guarded local filesystem bridge.
-- `src/document-export.ts` and `src/portable-markdown.ts` — export pipelines.
+- `node/http-workspace-bridge.ts` — guarded HTTP transport, installed by `vite.config.ts`.
+- `src/document-export-application.ts` — shared export orchestration used by the renderer and workspace application; `src/document-export.ts` and `src/portable-markdown.ts` implement serialization.
 - `examples/` — feature tour, CSV examples, and document themes.

@@ -37,7 +37,7 @@ test('saves image bytes through the local workspace bridge without overwriting',
 
   try {
     const openedResponse = await request.post(
-      'http://127.0.0.1:4173/__office_md_fs/open',
+      '/__office_md_fs/open',
       { data: { path: directory } },
     )
     expect(openedResponse.ok()).toBe(true)
@@ -50,7 +50,7 @@ test('saves image bytes through the local workspace bridge without overwriting',
       name: 'capture.png',
     })
     const savedResponse = await request.post(
-      `http://127.0.0.1:4173/__office_md_fs/write-image?${query}`,
+      `/__office_md_fs/write-image?${query}`,
       {
         data: originalBytes,
         headers: { 'Content-Type': 'application/octet-stream' },
@@ -69,7 +69,7 @@ test('saves image bytes through the local workspace bridge without overwriting',
       name: 'escape.png',
     })
     const unsafeResponse = await request.post(
-      `http://127.0.0.1:4173/__office_md_fs/write-image?${unsafeQuery}`,
+      `/__office_md_fs/write-image?${unsafeQuery}`,
       {
         data: originalBytes,
         headers: { 'Content-Type': 'application/octet-stream' },
@@ -92,7 +92,7 @@ test('rejects a stale workspace write through the local filesystem bridge', asyn
 
   try {
     const openedResponse = await request.post(
-      'http://127.0.0.1:4173/__office_md_fs/open',
+      '/__office_md_fs/open',
       { data: { path: directory } },
     )
     expect(openedResponse.ok()).toBe(true)
@@ -103,7 +103,7 @@ test('rejects a stale workspace write through the local filesystem bridge', asyn
     await writeFile(notePath, diskContents, 'utf8')
 
     const savedResponse = await request.post(
-      'http://127.0.0.1:4173/__office_md_fs/write',
+      '/__office_md_fs/write',
       {
         data: {
           workspaceId: opened.workspace.id,
