@@ -1,3 +1,4 @@
+import { resolveWorkspaceTarget } from './electron/workspace-path-policy'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -110,32 +111,10 @@ const readWorkspaceFiles = async (root: string, relative = ''): Promise<Array<{
   return files.sort((left, right) => left.name.localeCompare(right.name))
 }
 
-const resolveWorkspaceTarget = (root: string, name: string) => {
-  const normalizedName = name.replaceAll('\\', '/')
-  const parts = normalizedName.split('/')
-  if (
-    !normalizedName ||
-    parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))
-  ) {
-    throw new Error('The path is invalid.')
-  }
-  const target = path.resolve(root, normalizedName)
-  const relative = path.relative(root, target)
-  if (
-    !relative ||
-    relative === '..' ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error('The file path must stay inside the open folder.')
-  }
-  return target
-}
-
 const resolveWorkspaceDirectory = async (root: string, name: string) => {
   const normalizedName = name.replaceAll('\\', '/')
   const target = normalizedName
-    ? resolveWorkspaceTarget(root, normalizedName)
+    ? await resolveWorkspaceTarget(root, normalizedName)
     : root
   const resolved = await fs.realpath(target)
   const resolvedRoot = await fs.realpath(root)
@@ -201,7 +180,7 @@ const writeWorkspaceImage = async (
 }
 
 const resolveStyleTarget = async (root: string, name: string) => {
-  const target = resolveWorkspaceTarget(root, normalizeStyleFilePath(name))
+  const target = await resolveWorkspaceTarget(root, normalizeStyleFilePath(name))
   const resolved = await fs.realpath(target)
   const relative = path.relative(root, resolved)
   if (
@@ -304,7 +283,7 @@ const installFilesystemMiddleware = (
         }
         const root = workspaces.get(workspaceId)
         if (!root) throw new Error('The folder session expired. Open the folder again.')
-        const target = resolveWorkspaceTarget(root, name)
+        const target = await resolveWorkspaceTarget(root, name)
         const stats = await fs.stat(target)
         if (!stats.isFile()) throw new Error('Only files can be loaded as images.')
         response.statusCode = 200
@@ -447,7 +426,7 @@ const installFilesystemMiddleware = (
 
       if (url.pathname === `${API_ROOT}/mkdir`) {
         if (typeof body.name !== 'string') throw new Error('The folder path is invalid.')
-        const target = resolveWorkspaceTarget(root, body.name)
+        const target = await resolveWorkspaceTarget(root, body.name)
         try {
           await fs.access(target)
           throw new Error(`An entry named ${body.name} already exists.`)
@@ -469,7 +448,7 @@ const installFilesystemMiddleware = (
         if (typeof body.name !== 'string' || !isWorkspaceFile(body.name)) {
           throw new Error('The file name is invalid.')
         }
-        const target = resolveWorkspaceTarget(root, body.name)
+        const target = await resolveWorkspaceTarget(root, body.name)
         const stats = await fs.stat(target)
         if (!stats.isFile()) throw new Error('Only files can be deleted.')
         await fs.unlink(target)
@@ -480,7 +459,7 @@ const installFilesystemMiddleware = (
 
       if (url.pathname === `${API_ROOT}/delete-directory`) {
         if (typeof body.name !== 'string') throw new Error('The folder path is invalid.')
-        const target = resolveWorkspaceTarget(root, body.name)
+        const target = await resolveWorkspaceTarget(root, body.name)
         const stats = await fs.stat(target)
         if (!stats.isDirectory()) throw new Error('Only folders can be deleted.')
         if ((await fs.readdir(target)).length) {
@@ -498,7 +477,7 @@ const installFilesystemMiddleware = (
         if (typeof body.markdown !== 'string') {
           throw new Error('The file contents are invalid.')
         }
-        const target = resolveWorkspaceTarget(root, body.name)
+        const target = await resolveWorkspaceTarget(root, body.name)
         let diskContents: string | undefined
         try {
           const stats = await fs.stat(target)
@@ -551,8 +530,8 @@ const installFilesystemMiddleware = (
         ) {
           throw new Error('The file names are invalid.')
         }
-        const source = resolveWorkspaceTarget(root, body.oldName)
-        const destination = resolveWorkspaceTarget(root, body.newName)
+        const source = await resolveWorkspaceTarget(root, body.oldName)
+        const destination = await resolveWorkspaceTarget(root, body.newName)
         const sourceStats = await fs.stat(source)
         if (!sourceStats.isFile()) throw new Error('Only files can be renamed.')
         if (source === destination) {

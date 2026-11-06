@@ -248,3 +248,17 @@ When a document has unsaved local edits and its disk contents change or the file
 
 - **WHEN** a document with unsaved local edits is removed from disk outside office.md
 - **THEN** the local editor contents remain available and the user can explicitly recreate the file from the local version or discard it
+
+### Requirement: Reject symlink workspace targets
+
+The system SHALL reject workspace read and mutation requests whose target or any existing path component below the selected root is a symbolic link, including both rename endpoints and new file parents.
+
+#### Scenario: Read through a symlink
+
+- **WHEN** a requested file traverses a symlink below the selected root
+- **THEN** the request is rejected without disclosing outside contents
+
+#### Scenario: Mutate through a symlink
+
+- **WHEN** a write, rename, directory creation or deletion targets a symlink or traverses one
+- **THEN** the operation is rejected and outside content remains unchanged

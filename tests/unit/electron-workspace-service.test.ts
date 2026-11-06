@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -19,6 +19,21 @@ afterEach(async () => {
 })
 
 describe('Electron workspace service', () => {
+  it('rejects reads and mutations through symlinked workspace entries', async () => {
+    const root = await createFixture()
+    const outside = await createFixture()
+    await symlink(outside, path.join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    const service = createElectronWorkspaceService()
+    const { workspace } = await service.open(root)
+    await expect(service.readFile(workspace.id, 'linked/notes.md')).rejects.toThrow('symbolic link')
+    await expect(service.writeFile(workspace.id, 'linked/new.md', 'escape')).rejects.toThrow('symbolic link')
+    await expect(service.renameFile(workspace.id, 'notes.md', 'linked/moved.md')).rejects.toThrow('symbolic link')
+    await expect(service.deleteFile(workspace.id, 'linked/notes.md')).rejects.toThrow('symbolic link')
+    await expect(service.createDirectory(workspace.id, 'linked/new-folder')).rejects.toThrow('symbolic link')
+    expect(await readFile(path.join(outside, 'notes.md'), 'utf8')).toBe('# Notes\n')
+    await expect(readFile(path.join(outside, 'new.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('dispatches only allowlisted workspace operations', async () => {
     const root = await createFixture()
     const service = createElectronWorkspaceService()

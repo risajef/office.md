@@ -1,3 +1,4 @@
+import { resolveWorkspaceTarget } from './workspace-path-policy'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -123,32 +124,10 @@ const readWorkspaceDirectories = async (
   return directories.sort((left, right) => left.localeCompare(right))
 }
 
-const resolveWorkspaceTarget = (root: string, name: string) => {
-  const normalizedName = name.replaceAll('\\', '/')
-  const parts = normalizedName.split('/')
-  if (
-    !normalizedName ||
-    parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))
-  ) {
-    throw new Error('The path is invalid.')
-  }
-  const target = path.resolve(root, normalizedName)
-  const relative = path.relative(root, target)
-  if (
-    !relative ||
-    relative === '..' ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error('The file path must stay inside the open folder.')
-  }
-  return target
-}
-
 const resolveWorkspaceDirectory = async (root: string, name: string) => {
   const normalizedName = name.replaceAll('\\', '/')
   const target = normalizedName
-    ? resolveWorkspaceTarget(root, normalizedName)
+    ? await resolveWorkspaceTarget(root, normalizedName)
     : root
   const resolved = await fs.realpath(target)
   const relative = path.relative(root, resolved)
@@ -224,7 +203,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
 
   const readFile = async (workspaceId: string, name: string) => {
     if (!isEditableTextFile(name)) throw new Error('The file name is invalid.')
-    const target = resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
+    const target = await resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
     const stats = await fs.stat(target)
     if (!stats.isFile()) throw new Error('Only files can be read.')
     return fs.readFile(target, 'utf8')
@@ -232,7 +211,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
 
   const readAssetUrl = async (workspaceId: string, name: string) => {
     if (!isImageFile(name)) throw new Error('The image path is invalid.')
-    const target = resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
+    const target = await resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
     const stats = await fs.stat(target)
     if (!stats.isFile()) throw new Error('Only files can be loaded as images.')
     const contents = await fs.readFile(target)
@@ -248,7 +227,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     if (typeof markdown !== 'string') throw new Error('The file contents are invalid.')
     const workspace = requireWorkspace(workspaceId)
     const root = workspace.root
-    const target = resolveWorkspaceTarget(root, name)
+    const target = await resolveWorkspaceTarget(root, name)
 
     let diskContents: string | undefined
     try {
@@ -351,8 +330,8 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
     }
     const workspace = requireWorkspace(workspaceId)
     const root = workspace.root
-    const source = resolveWorkspaceTarget(root, oldName)
-    const destination = resolveWorkspaceTarget(root, newName)
+    const source = await resolveWorkspaceTarget(root, oldName)
+    const destination = await resolveWorkspaceTarget(root, newName)
     const sourceStats = await fs.stat(source)
     if (!sourceStats.isFile()) throw new Error('Only files can be renamed.')
     if (source === destination) return
@@ -369,7 +348,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
   }
 
   const createDirectory = async (workspaceId: string, name: string) => {
-    const target = resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
+    const target = await resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
     if (await entryExists(target)) {
       throw new Error(`An entry named ${name} already exists.`)
     }
@@ -379,7 +358,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
   const deleteFile = async (workspaceId: string, name: string) => {
     if (!isWorkspaceFile(name)) throw new Error('The file name is invalid.')
     const workspace = requireWorkspace(workspaceId)
-    const target = resolveWorkspaceTarget(workspace.root, name)
+    const target = await resolveWorkspaceTarget(workspace.root, name)
     const stats = await fs.stat(target)
     if (!stats.isFile()) throw new Error('Only files can be deleted.')
     await fs.unlink(target)
@@ -387,7 +366,7 @@ export const createElectronWorkspaceService = (): ElectronWorkspaceService => {
   }
 
   const deleteDirectory = async (workspaceId: string, name: string) => {
-    const target = resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
+    const target = await resolveWorkspaceTarget(requireWorkspace(workspaceId).root, name)
     const stats = await fs.stat(target)
     if (!stats.isDirectory()) throw new Error('Only folders can be deleted.')
     if ((await fs.readdir(target)).length) {

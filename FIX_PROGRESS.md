@@ -8,7 +8,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | --- | --- | --- |
 | F1 Export script injection | Done | CSS breakout regression and print sandbox tests pass; 184 unit tests, web/Electron builds, browser export test, specs pass. |
 | F2 HTML sanitizer | Done | DOMPurify replaces denylist parsing; control-character, include and markup regressions; 186 unit tests, build, two browser tests and specs pass. |
-| F3 Filesystem confinement | Pending | |
+| F3 Filesystem confinement | Done | Shared path policy rejects symlink reads and mutation endpoints; 187 unit tests, Electron build, three HTTP integration tests and specs pass. |
 | F4 Save revision tracking | Pending | |
 | F5 Deleted browser files | Pending | |
 | F6 Cache failures block saves | Pending | |
