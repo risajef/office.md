@@ -1,0 +1,38 @@
+name: Validate source
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install browser and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Run unit tests
+        run: npm test
+      - name: Build web renderer
+        run: npm run build
+      - name: Build Electron entry points
+        run: npm run build:electron
+      - name: Validate specifications
+        run: npm run spec:validate
+      - name: Run browser and Electron integration tests
+        run: xvfb-run -a npm run test:e2e

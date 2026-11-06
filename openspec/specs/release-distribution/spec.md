@@ -134,3 +134,12 @@ The Electron application SHALL provide an **Update...** action in its **Help** m
 
 - **WHEN** the user selects **Update...** in an unpackaged or unsupported runtime
 - **THEN** the application reports that updates are unavailable for this installation and does not download or install an update
+
+### Requirement: Validate ordinary source changes
+
+The repository SHALL run unit tests, web and Electron builds, specification validation and browser/Electron integration tests for branch pushes and pull requests without publishing artifacts or releases.
+
+#### Scenario: Source is pushed or proposed
+
+- **WHEN** a branch push or pull request updates repository source
+- **THEN** CI validates the source without release publishing permissions
