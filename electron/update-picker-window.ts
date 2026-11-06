@@ -142,8 +142,11 @@ export const createElectronUpdatePicker = (
     retryResolver = undefined
   }
 
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+
   const isPickerWindow = (event: Electron.IpcMainEvent) =>
-    event.sender.id === window.webContents.id
+    event.sender.id === window.webContents.id && event.senderFrame === window.webContents.mainFrame
 
   const handleSelect = (event: Electron.IpcMainEvent, value: unknown) => {
     if (!isPickerWindow(event) || typeof value !== 'string') return

@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url'
+import { isTrustedRenderer, externalWebUrl } from './renderer-policy'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { autoUpdater } from 'electron-updater'
@@ -33,6 +35,15 @@ import {
 const service = createElectronWorkspaceService()
 const styleFolderService = createElectronStyleFolderService()
 let mainWindow: BrowserWindow | undefined
+const trustedRendererUrl = () => process.env.OFFICE_MD_DEV_SERVER_URL ?? pathToFileURL(path.join(app.getAppPath(), 'dist', 'index.html')).href
+const handleRendererRequest = (channel: string, handler: Parameters<typeof ipcMain.handle>[1]) => {
+  ipcMain.handle(channel, (event, ...args: unknown[]) => {
+    if (!isTrustedRenderer(event, mainWindow?.webContents, trustedRendererUrl())) {
+      throw new Error('Untrusted renderer request.')
+    }
+    return handler(event, ...args)
+  })
+}
 let lastWorkspacePath: string | undefined
 
 const updatePlatform: UpdatePlatform = process.platform === 'win32' ? 'win32' : 'linux'
@@ -53,7 +64,7 @@ const recordPayload = (payload: unknown) => {
 }
 
 const registerWorkspaceHandlers = () => {
-  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.open, async (_event, startLocation: unknown) => {
+  handleRendererRequest(ELECTRON_WORKSPACE_CHANNELS.open, async (_event, startLocation: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
     const testWorkspacePath = process.env.OFFICE_MD_TEST_WORKSPACE
     let selectedPath = testWorkspacePath
@@ -80,7 +91,7 @@ const registerWorkspaceHandlers = () => {
     return service.open(selectedPath)
   })
 
-  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.openFile, async (_event, startLocation: unknown) => {
+  handleRendererRequest(ELECTRON_WORKSPACE_CHANNELS.openFile, async (_event, startLocation: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
     const testFilePath = process.env.OFFICE_MD_TEST_FILE
     let selectedFile: string | undefined
@@ -123,7 +134,7 @@ const registerWorkspaceHandlers = () => {
     return { snapshot, fileName }
   })
 
-  ipcMain.handle(ELECTRON_WORKSPACE_CHANNELS.restore, async () => {
+  handleRendererRequest(ELECTRON_WORKSPACE_CHANNELS.restore, async () => {
     if (!lastWorkspacePath) return undefined
     try {
       return await service.restore(lastWorkspacePath)
@@ -146,7 +157,7 @@ const registerWorkspaceHandlers = () => {
   ] as const
 
   for (const [operation, channel] of operations) {
-    ipcMain.handle(channel, (_event, payload: unknown) => {
+    handleRendererRequest(channel, (_event, payload: unknown) => {
       const fields = recordPayload(payload)
       return service.dispatch({
         ...fields,
@@ -157,13 +168,13 @@ const registerWorkspaceHandlers = () => {
 }
 
 const registerStyleFolderHandlers = () => {
-  ipcMain.handle(ELECTRON_STYLE_FOLDER_CHANNELS.restore, async () => {
+  handleRendererRequest(ELECTRON_STYLE_FOLDER_CHANNELS.restore, async () => {
     const managedPath = path.join(app.getPath('userData'), 'styles')
     const templatesPath = path.join(app.getAppPath(), 'dist-electron', 'styles')
     return styleFolderService.openManaged(managedPath, templatesPath)
   })
 
-  ipcMain.handle(
+  handleRendererRequest(
     ELECTRON_STYLE_FOLDER_CHANNELS.openFolder,
     createOpenManagedStyleFolderHandler(
       {
@@ -185,7 +196,7 @@ const registerStyleFolderHandlers = () => {
     ['readFile', ELECTRON_STYLE_FOLDER_CHANNELS.readFile],
   ] as const
   for (const [operation, channel] of operations) {
-    ipcMain.handle(channel, (_event, payload: unknown) => {
+    handleRendererRequest(channel, (_event, payload: unknown) => {
       const fields = recordPayload(payload)
       return styleFolderService.dispatch({
         ...fields,
@@ -196,7 +207,7 @@ const registerStyleFolderHandlers = () => {
 }
 
 const registerShareHandlers = () => {
-  ipcMain.handle(ELECTRON_SHARE_CHANNELS.openArchive, async () => {
+  handleRendererRequest(ELECTRON_SHARE_CHANNELS.openArchive, async () => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
     const testArchivePath = process.env.OFFICE_MD_TEST_SHARE_ARCHIVE
     let selectedPath = testArchivePath
@@ -212,7 +223,7 @@ const registerShareHandlers = () => {
     return new Uint8Array(await readFile(selectedPath))
   })
 
-  ipcMain.handle(ELECTRON_SHARE_CHANNELS.saveArchive, async (_event, input: unknown) => {
+  handleRendererRequest(ELECTRON_SHARE_CHANNELS.saveArchive, async (_event, input: unknown) => {
     if (!mainWindow) throw new Error('The Electron window is not ready.')
     const value = recordPayload(input)
     if (!(value.bytes instanceof Uint8Array) || typeof value.suggestedName !== 'string') {
@@ -330,6 +341,15 @@ const createWindow = async () => {
       preload: path.join(__dirname, 'preload.js'),
     },
   })
+
+  const openWebLink = (url: string) => {
+    const external = externalWebUrl(url)
+    if (external) void shell.openExternal(external).catch((error) => console.warn('Could not open external link.', error))
+  }
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => { openWebLink(url); return { action: 'deny' } })
+  mainWindow.webContents.on('will-navigate', (event, url) => { event.preventDefault(); openWebLink(url) })
+  mainWindow.webContents.on('will-redirect', (event) => event.preventDefault())
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault())
 
   const developmentUrl = process.env.OFFICE_MD_DEV_SERVER_URL
   if (developmentUrl) {

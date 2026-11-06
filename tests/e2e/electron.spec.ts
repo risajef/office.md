@@ -85,7 +85,7 @@ test('Electron shell loads the shared renderer and secure workspace bridge', asy
   await writeRepresentativeWorkspace(workspace)
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
-  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_DEV_SERVER_URL = test.info().project.use.baseURL ?? 'http://127.0.0.1:4173'
   environment.OFFICE_MD_TEST_WORKSPACE = workspace
   const virtualDisplay = needsXvfb ? await startXvfb() : undefined
   if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
@@ -122,7 +122,7 @@ test('Electron opens a selected Markdown file with its immediate parent workspac
   await writeFile(path.join(nested, 'ignored.txt'), 'not supported')
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
-  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_DEV_SERVER_URL = test.info().project.use.baseURL ?? 'http://127.0.0.1:4173'
   environment.OFFICE_MD_TEST_FILE = path.join(nested, 'selected.markdown')
   const virtualDisplay = needsXvfb ? await startXvfb() : undefined
   if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
@@ -162,7 +162,7 @@ test('Electron opens and saves a password-protected share through its main-proce
   await writeFile(archivePath, sourceArchive)
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
-  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_DEV_SERVER_URL = test.info().project.use.baseURL ?? 'http://127.0.0.1:4173'
   environment.OFFICE_MD_TEST_SHARE_ARCHIVE = archivePath
   environment.OFFICE_MD_TEST_SHARE_SAVE_PATH = savedPath
   const virtualDisplay = needsXvfb ? await startXvfb() : undefined
@@ -235,7 +235,7 @@ test('shows Help information and update actions without a startup update notific
   await writeRepresentativeWorkspace(workspace)
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
-  environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+  environment.OFFICE_MD_DEV_SERVER_URL = test.info().project.use.baseURL ?? 'http://127.0.0.1:4173'
   environment.OFFICE_MD_TEST_WORKSPACE = workspace
   const virtualDisplay = needsXvfb ? await startXvfb() : undefined
   if (virtualDisplay) environment.DISPLAY = virtualDisplay.display
@@ -280,7 +280,7 @@ test('initializes, opens, and preserves the managed styles folder across Electro
   const launch = async () => {
     const environment = { ...process.env }
     delete environment.ELECTRON_RUN_AS_NODE
-    environment.OFFICE_MD_DEV_SERVER_URL = 'http://127.0.0.1:4173'
+    environment.OFFICE_MD_DEV_SERVER_URL = test.info().project.use.baseURL ?? 'http://127.0.0.1:4173'
     environment.OFFICE_MD_TEST_WORKSPACE = workspace
     environment.OFFICE_MD_TEST_STYLE_FOLDER_OPEN_LOG = openedPathLog
     const virtualDisplay = needsXvfb ? await startXvfb() : undefined
