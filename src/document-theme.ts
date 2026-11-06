@@ -1,3 +1,4 @@
+import { parse, generate, walk, type CssNode, type List } from 'css-tree'
 export type DocumentThemeSource = {
   id: string
   name: string
@@ -58,31 +59,40 @@ export const scopeCssSelector = (selector: string) => {
     : `${scope} ${scopedGlobals}`
 }
 
-export const scopeDocumentCss = (style: HTMLStyleElement) => {
-  const rules = style.sheet?.cssRules
-  if (!rules) return
+const decorativeProperty = /^(?:color|color-scheme|background(?:-color)?|font(?:-[a-z-]+)?|line-height|letter-spacing|word-spacing|text-[a-z-]+|white-space|overflow-wrap|word-break|hyphens|border(?:-[a-z-]+)?|padding(?:-[a-z-]+)?|margin(?:-[a-z-]+)?|box-shadow|list-style-type|list-style-position|fill|stroke(?:-[a-z-]+)?|opacity)$/
 
-  const visit = (list: CSSRuleList) => {
-    for (const rule of Array.from(list)) {
-      if (rule.type === 1) {
-        const styleRule = rule as CSSStyleRule
-        styleRule.selectorText = splitCssSelectors(styleRule.selectorText)
-          .map(scopeCssSelector)
-          .join(', ')
-        continue
-      }
-
-      // Keyframe selectors such as `from` and `to` must remain untouched.
-      if (rule.type === 7 || !('cssRules' in rule)) continue
-      try {
-        visit((rule as CSSGroupingRule).cssRules)
-      } catch {
-        // Some browser-managed rules (for example cross-origin imports) are not readable.
-      }
-    }
+export const sanitizeDocumentCss = (source: string) => {
+  const ast = parse(source, { parseCustomProperty: true })
+  const filter = (children: List<CssNode>) => {
+    children.forEach((node, item) => {
+      if (node.type === 'Atrule' && ['media', 'supports'].includes(node.name.toLowerCase()) && node.block) {
+        filter(node.block.children)
+      } else if (node.type === 'Rule' && node.prelude.type === 'SelectorList') {
+        const selectors = splitCssSelectors(generate(node.prelude)).map((selector) =>
+          `:is(${scopeCssSelector(selector)}):where(.editor-wrap, .editor-wrap *)`,
+        )
+        const prelude = parse(selectors.join(','), { context: 'selectorList' })
+        if (prelude.type !== 'SelectorList') { children.remove(item); return }
+        node.prelude = prelude
+        node.block.children.forEach((declaration, declarationItem) => {
+          if (declaration.type !== 'Declaration') { node.block.children.remove(declarationItem); return }
+          let safe = declaration.property.startsWith('--') || decorativeProperty.test(declaration.property.toLowerCase())
+          walk(declaration.value, (value) => {
+            if (value.type === 'Url' || value.type === 'Raw' ||
+              (value.type === 'Function' && !['var', 'calc', 'min', 'max', 'clamp', 'rgb', 'rgba', 'hsl', 'hsla', 'oklch', 'oklab', 'color-mix', 'linear-gradient', 'radial-gradient'].includes(value.name.toLowerCase()))) safe = false
+          })
+          if (!safe) node.block.children.remove(declarationItem)
+        })
+      } else children.remove(item)
+    })
   }
+  if (ast.type !== 'StyleSheet') return ''
+  filter(ast.children)
+  return generate(ast)
+}
 
-  visit(rules)
+export const scopeDocumentCss = (style: HTMLStyleElement) => {
+  style.textContent = sanitizeDocumentCss(style.textContent ?? '')
 }
 
 export const applyDocumentTheme = (
@@ -92,8 +102,7 @@ export const applyDocumentTheme = (
   const style = ownerDocument.createElement('style')
   style.dataset.documentTheme = source.id
   style.dataset.themeOrigin = source.origin
-  style.textContent = source.contents
+  style.textContent = sanitizeDocumentCss(source.contents)
   ownerDocument.head.append(style)
-  scopeDocumentCss(style)
   return style
 }

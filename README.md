@@ -164,6 +164,8 @@ Open a `.css` file from the Files panel to apply it. Selectors are scoped to `.e
 
 Only Markdown and CSV files can be included. Workspace CSS files are applied directly from the Files panel.
 
+Theme CSS supports document typography, colors, borders, spacing, custom properties, and `@media`/`@supports` groups. Imports, global at-rules (including `@font-face` and keyframes), URL values, positioning, and stacking declarations are removed before the stylesheet reaches the document. Selectors can only target the document subtree. Use installed font families rather than theme-defined network fonts.
+
 To reuse themes across projects, use **Select style folder** in the Styles panel. The selected folder is scanned independently for visible `.css` files, including nested files, and those files appear only as read-only theme sources; they are not workspace files, include sources, or mutation targets. Selecting another folder or a workspace CSS file replaces the active theme. Electron remembers the last readable style folder in its user-data preferences and clears the location if it is no longer available. Styles are currently text-only: external resources and nested `@import` graphs are not resolved, so the active CSS is inlined into HTML and print exports without depending on the original folder path.
 
 ## Tests

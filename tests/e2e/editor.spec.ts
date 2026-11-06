@@ -1422,8 +1422,8 @@ test.describe('rich document behavior', () => {
     expect(await page.locator('.editor-wrap').evaluate(
       (element) => getComputedStyle(element)
         .getPropertyValue('--page-bg')
-        .trim(),
-    )).toBe('rgb(31, 32, 33)')
+        .replace(/\s/g, ''),
+    )).toBe('rgb(31,32,33)')
     expect(await page.evaluate(() => getComputedStyle(
       document.querySelector('.ProseMirror') as HTMLElement,
     ).fontFamily)).toContain('Courier New')

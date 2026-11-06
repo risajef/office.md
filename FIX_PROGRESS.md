@@ -18,7 +18,7 @@ Each finding is implemented and committed separately, with regression evidence a
 | F10 Standalone image export | Done | Async export embeds local images, preserves remote URLs and reports missing assets; full unit suite/build and fresh-context network-blocked browser export tests pass. |
 | F11 Branch/PR validation | Done | Read-only push/PR validation workflow runs unit, web/Electron build, specs and browser/Electron checks; YAML triggers/permissions verified; 203 local unit tests and specs pass. Hosted execution awaits a future push. |
 | A1 Electron sender/navigation policy | Done | Main-frame and trusted-URL IPC authorization; blocked navigation/popups with HTTP(S)-only external opening; 205 unit tests, Electron build and all five desktop workflows pass. |
-| A2 Theme containment | Pending | |
+| A2 Theme containment | Done | Detached css-tree policy removes network/global/overlay CSS; subtree selector and paint containment; 207 unit tests, build, theme typography/export browser tests pass. |
 | A3 Include expansion budgets | Pending | |
 | A4 Session disposal | Pending | |
 | A5 IPC payload validation | Pending | |

@@ -3243,3 +3243,9 @@ button.document-name:disabled {
     width: 100%;
   }
 }
+
+/* Themes may decorate the document but cannot paint over application chrome. */
+.editor-wrap.has-document-theme {
+  contain: paint;
+  isolation: isolate;
+}
